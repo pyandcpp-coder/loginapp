@@ -20,9 +20,9 @@ const PostItem = ({ item }: { item: Post }) => {
   const [showComments, setShowComments] = useState(false);
 
   // Live Queries for THIS post
-  // FIX: Only count likes that are NOT deleted
-  const likes = useQuery(Like).filtered('postId == $0 AND isDeleted == false', item._id.toHexString());
-  const comments = useQuery(Comment).filtered('postId == $0', item._id.toHexString()).sorted('timestamp');
+  // FIX: Only count likes that are NOT deleted (deletedAt == null)
+  const likes = useQuery(Like).filtered('postId == $0 AND deletedAt == null', item._id.toHexString());
+  const comments = useQuery(Comment).filtered('postId == $0 AND deletedAt == null', item._id.toHexString()).sorted('timestamp');
   
   const myLike = likes.find(l => l.userEmail === user?.email);
   const isLiked = !!myLike;
@@ -30,16 +30,15 @@ const PostItem = ({ item }: { item: Post }) => {
   const toggleLike = () => {
     realm.write(() => {
       if (myLike) {
-        // BUG FIX: Don't delete! Mark as deleted.
-        // If it was already syncing (true), set to false so sync engine catches it.
-        myLike.isDeleted = true;
+        // Soft delete: set deletedAt instead of removing
+        myLike.deletedAt = new Date();
         myLike.isSynced = false;
       } else {
-        // Check if we have a "Deleted" like we can resurrect (optimization)
-        const deletedLike = realm.objects<Like>('Like').filtered('postId == $0 AND userEmail == $1 AND isDeleted == true', item._id.toHexString(), user?.email)[0];
+        // Check if we have a "soft-deleted" like we can resurrect (optimization)
+        const deletedLike = realm.objects<Like>('Like').filtered('postId == $0 AND userEmail == $1 AND deletedAt != null', item._id.toHexString(), user?.email)[0];
         
         if (deletedLike) {
-          deletedLike.isDeleted = false;
+          deletedLike.deletedAt = undefined;
           deletedLike.isSynced = false;
         } else {
           realm.create('Like', {
@@ -47,7 +46,6 @@ const PostItem = ({ item }: { item: Post }) => {
             postId: item._id.toHexString(),
             userEmail: user?.email || 'anon',
             isSynced: false,
-            isDeleted: false,
           });
         }
       }
@@ -187,7 +185,7 @@ export default function HomeScreen() {
     // Check Network & Trigger Background Sync
     const state = await NetInfo.fetch();
     if (state.isConnected) {
-      
+
       console.log("⚡️ Online! Triggering immediate sync...");
       SyncEngine.pushChanges(realm); 
     }

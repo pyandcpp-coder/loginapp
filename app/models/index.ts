@@ -7,6 +7,7 @@ export class Post extends Realm.Object<Post> {
   text!: string;
   timestamp!: Date;
   isSynced!: boolean;
+  deletedAt?: Date;
   localUri?: string;
   remoteUrl?: string;
   userEmail!:string;
@@ -18,6 +19,7 @@ export class Post extends Realm.Object<Post> {
       text: 'string',
       timestamp: 'date',
       isSynced: { type: 'bool', default: false },
+      deletedAt: 'date?',
       localUri: 'string?',
       remoteUrl:'string?',
       userEmail:{type:'string',default:'anon'}
@@ -30,7 +32,7 @@ export class Like extends Realm.Object<Like> {
   postId!: string;
   userEmail!: string;
   isSynced!: boolean;
-  isDeleted!: boolean;
+  deletedAt?: Date;
 
   static schema: Realm.ObjectSchema = {
     name: 'Like',
@@ -39,7 +41,7 @@ export class Like extends Realm.Object<Like> {
       postId: 'string',
       userEmail: 'string',
       isSynced: { type: 'bool', default: false },
-      isDeleted:{type:'bool',default:false},
+      deletedAt: 'date?',
     },
     primaryKey: '_id',
   };
@@ -52,8 +54,7 @@ export class Comment extends Realm.Object<Comment> {
   text!: string;
   timestamp!: Date;
   isSynced!: boolean;
-  isDeleted!: boolean;
-
+  deletedAt?: Date;
 
   static schema: Realm.ObjectSchema = {
     name: 'Comment',
@@ -64,7 +65,21 @@ export class Comment extends Realm.Object<Comment> {
       text: 'string',
       timestamp: 'date',
       isSynced: { type: 'bool', default: false },
-      isDeleted: {type: 'bool', default:false},
+      deletedAt: 'date?',
+    },
+    primaryKey: '_id',
+  };
+}
+
+export class SystemSettings extends Realm.Object<SystemSettings> {
+  _id!: Realm.BSON.ObjectId;
+  lastSyncTime!: Date;
+
+  static schema: Realm.ObjectSchema = {
+    name: 'SystemSettings',
+    properties: {
+      _id: 'objectId',
+      lastSyncTime: { type: 'date', default: new Date(0) },
     },
     primaryKey: '_id',
   };
@@ -86,11 +101,19 @@ async function getRealmKey(): Promise<ArrayBuffer> {
 
 
 export const { RealmProvider, useRealm, useQuery } = createRealmContext({
-  schema: [Post,Like,Comment],
-  schemaVersion: 5,
+  schema: [Post, Like, Comment, SystemSettings],
+  schemaVersion: 6,
   onMigration: (oldRealm, newRealm) => {
     // Migration logic - this will be called when schema version changes
     console.log('Realm migration started...');
-    // No data transformation needed, Realm will handle adding the new properties with their defaults
+    // Realm will handle adding new properties with their defaults
+    
+    // Initialize SystemSettings if it doesn't exist
+    if (newRealm.objects('SystemSettings').length === 0) {
+      newRealm.create('SystemSettings', {
+        _id: new Realm.BSON.ObjectId(),
+        lastSyncTime: new Date(0),
+      });
+    }
   },
 });
