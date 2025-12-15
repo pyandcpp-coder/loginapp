@@ -1,4 +1,4 @@
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { supabase } from './supabaseClient';
 import { decode } from 'base64-arraybuffer';
@@ -17,7 +17,7 @@ export const VideoUtils = {
     }
   },
 
-  // 2. Upload Video - Using Direct Supabase REST API
+  // 2. Upload Video - Using Supabase JS Client
   uploadVideo: async (localUri: string, postId: string) => {
     try {
       console.log('📹 Starting video upload from:', localUri);
@@ -32,37 +32,25 @@ export const VideoUtils = {
 
       console.log('✅ File read successfully, size:', fileData.length);
 
-      // Convert base64 to Uint8Array for upload
+      // Convert base64 to ArrayBuffer for upload
       const arrayBuffer = decode(fileData);
       console.log('✅ Base64 decoded, buffer size:', arrayBuffer.byteLength);
 
-      // Get the anon key from environment
-      const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      const projectId = process.env.EXPO_PUBLIC_SUPABASE_PROJECT_ID;
+      // Use Supabase client to upload with ArrayBuffer directly
+      // Supabase JS SDK supports ArrayBuffer, Blob, File, or FormData
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .upload(remotePath, arrayBuffer, {
+          contentType: 'video/mp4',
+          upsert: true, // Allow overwriting if file exists
+        });
 
-      if (!anonKey || !projectId) {
-        throw new Error('Missing Supabase credentials in environment');
+      if (error) {
+        console.error('❌ Supabase upload error:', error);
+        throw new Error(`Upload failed: ${error.message}`);
       }
 
-      // Direct REST API upload (bypass JS SDK issues)
-      const uploadUrl = `https://${projectId}.supabase.co/storage/v1/object/${bucket}/${remotePath}`;
-      
-      const response = await fetch(uploadUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${anonKey}`,
-          'Content-Type': 'video/mp4',
-        },
-        body: arrayBuffer,
-      });
-
-      console.log('📤 Upload response status:', response.status);
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ Upload failed:', response.status, errorText);
-        throw new Error(`Upload failed: ${response.status} ${errorText}`);
-      }
+      console.log('✅ Upload response data:', data);
 
       // Get public URL
       const { data: publicUrlData } = supabase.storage

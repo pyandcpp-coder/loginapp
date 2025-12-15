@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, Link } from 'expo-router';
 import { Realm } from '@realm/react';
 import { useRealm, useQuery, Post, Like, Comment } from '../models';
@@ -11,7 +12,7 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAuthStore } from '../store/authStore';
-
+import { VideoUtils } from '../services/videoUpload';
 
 const PostItem = ({ item }: { item: Post }) => {
   const realm = useRealm();
@@ -131,37 +132,51 @@ const PostItem = ({ item }: { item: Post }) => {
 export default function HomeScreen() {
   const router = useRouter();
   const [newPostText, setNewPostText] = useState('');
-  const [imageUri, setImageUri] = useState<string | null>(null); 
+  const [media, setMedia] = useState<{uri: string, type: 'image'|'video', thumbnail?: string} | null>(null); 
   
   // 1. Live Query from Realm (Sorted by newest)
-  const posts = useQuery(Post).sorted('timestamp', true);
   const realm = useRealm();
+  const posts = useQuery(Post).sorted('timestamp', true);
 
-  // 2. Pick Image Function
-  const pickImage = async () => {
+  // 2. Pick Media Function
+  const pickMedia = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images', 'videos'] as any,
       allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.5, // Compress for faster sync
+      quality: 0.5,
+      videoMaxDuration: 60,
     });
 
     if (!result.canceled) {
-      setImageUri(result.assets[0].uri);
+      const asset = result.assets[0];
+      
+      // Check if it is a video
+      const isVideo = asset.type === 'video' || asset.uri.endsWith('.mp4') || asset.uri.endsWith('.mov');
+
+      if (isVideo) {
+        // Generate thumbnail so we can show a preview
+        const thumb = await VideoUtils.generateThumbnail(asset.uri);
+        setMedia({ uri: asset.uri, type: 'video', thumbnail: thumb || undefined });
+      } else {
+        setMedia({ uri: asset.uri, type: 'image' });
+      }
     }
   };
 
   // 3. Handle New Post (Offline First)
   const handleAddPost = async () => {
-    if (!newPostText && !imageUri) return; // Don't post empty stuff
+    if (!newPostText && !media) return;
 
-    // Copy image to permanent location if present
-    let permanentUri = imageUri;
-    if (imageUri) {
-      const filename = imageUri.split('/').pop() || `${Date.now()}.jpg`;
+    // Copy media to permanent location
+    let permanentUri = media?.uri;
+    if (media?.uri) {
+      // Determine extension based on type
+      const ext = media.type === 'video' ? 'mp4' : 'jpg';
+      const filename = `${Date.now()}.${ext}`;
       const newPath = `${FileSystem.documentDirectory}${filename}`;
+      
       await FileSystem.copyAsync({
-        from: imageUri,
+        from: media.uri,
         to: newPath,
       });
       permanentUri = newPath;
@@ -173,14 +188,18 @@ export default function HomeScreen() {
         _id: new Realm.BSON.ObjectId(),
         text: newPostText,
         timestamp: new Date(),
-        localUri: permanentUri ?? undefined, // Store permanent local path
+        localUri: permanentUri ?? undefined,
+        
+        // SAVE THE MEDIA TYPE!
+        mediaType: media?.type || 'image', 
+        thumbnailUrl: media?.thumbnail,
         isSynced: false,
       });
     });
 
     // Reset Inputs UI
     setNewPostText('');
-    setImageUri(null);
+    setMedia(null);
 
     // Check Network & Trigger Background Sync
     const state = await NetInfo.fetch();
@@ -206,7 +225,7 @@ export default function HomeScreen() {
       </View>
       <View style={styles.inputWrapper}>
         <View style={styles.inputContainer}>
-          <TouchableOpacity onPress={pickImage} style={styles.imagePickerButton}>
+          <TouchableOpacity onPress={pickMedia} style={styles.imagePickerButton}>
             <Text style={{fontSize: 22}}>📷</Text>
           </TouchableOpacity>
 
@@ -224,10 +243,13 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
-        {imageUri && (
+        {media && (
           <View style={styles.previewContainer}>
-            <Image source={{ uri: imageUri }} style={styles.previewImage} />
-            <TouchableOpacity onPress={() => setImageUri(null)} style={styles.removeButton}>
+            <Image source={{ uri: media.thumbnail || media.uri }} style={styles.previewImage} />
+            
+            {media.type === 'video' && <Text style={{position:'absolute', left: 20}}>🎬</Text>}
+            
+            <TouchableOpacity onPress={() => setMedia(null)} style={styles.removeButton}>
               <Text style={styles.removeText}>✕</Text>
             </TouchableOpacity>
           </View>
@@ -236,7 +258,7 @@ export default function HomeScreen() {
 
       <View style={styles.listContainer}>
         <FlashList
-          data={Array.from(posts)}
+          data={realm.isClosed ? [] : Array.from(posts)}
           renderItem={({ item }) => <PostItem item={item} />}
           keyExtractor={(item) => item._id.toHexString()}
         />

@@ -97,14 +97,7 @@ const FeedFooter = ({ item }: { item: Post }) => {
 const VideoComponent = React.memo(({ item, isVisible, isNext }: { item: Post, isVisible: boolean, isNext: boolean }) => {
   const videoRef = useRef<Video>(null);
 
-  // OPTIMIZATION: From the article comments
-  // If video is not visible AND not the next one, render an empty placeholder.
-  // This saves massive memory/CPU by not keeping 50 videos mounted.
-  if (!isVisible && !isNext) {
-    return <View style={{ height: SCREEN_HEIGHT, width: width, backgroundColor: 'black' }} />;
-  }
-
-  // Manage Playback
+  // Manage Playback - ALWAYS call hooks before any early returns
   React.useEffect(() => {
     if (!videoRef.current) return;
     if (isVisible) {
@@ -117,6 +110,13 @@ const VideoComponent = React.memo(({ item, isVisible, isNext }: { item: Post, is
       }
     }
   }, [isVisible, isNext]);
+
+  // OPTIMIZATION: From the article comments
+  // If video is not visible AND not the next one, render an empty placeholder.
+  // This saves massive memory/CPU by not keeping 50 videos mounted.
+  if (!isVisible && !isNext) {
+    return <View style={{ height: SCREEN_HEIGHT, width: width, backgroundColor: 'black' }} />;
+  }
 
   return (
     <View style={[styles.videoContainer, { height: SCREEN_HEIGHT }]}>

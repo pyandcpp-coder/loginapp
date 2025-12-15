@@ -108,6 +108,12 @@ const ConflictResolver = {
 export const SyncEngine = {
   // 1. PUSH (Uploads)
   pushChanges: async (realm: Realm) => {
+    // Check if realm is valid
+    if (!realm || realm.isClosed) {
+      console.warn("⚠️ Realm is closed, skipping push");
+      return;
+    }
+    
     // A. SYNC POSTS
     const unsyncedPosts = realm.objects<Post>('Post').filtered('isSynced == false');
     
@@ -324,6 +330,12 @@ export const SyncEngine = {
 
   // 2. PULL (Downloads & Prefetching)
   pullChanges: async (realm: Realm) => {
+    // Check if realm is valid
+    if (!realm || realm.isClosed) {
+      console.warn("⚠️ Realm is closed, skipping pull");
+      return;
+    }
+    
     // A. Get Last Sync Time
     let settings = realm.objects<SystemSettings>('SystemSettings')[0];
     if (!settings) {
