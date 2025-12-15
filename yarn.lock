@@ -3632,7 +3632,7 @@ expo-keep-awake@~15.0.8:
 
 expo-linear-gradient@~15.0.8:
   version "15.0.8"
-  resolved "https://registry.yarnpkg.com/expo-linear-gradient/-/expo-linear-gradient-15.0.8.tgz#17cb49522699d2a033eae93146bc820ef180f4f8"
+  resolved "https://registry.npmjs.org/expo-linear-gradient/-/expo-linear-gradient-15.0.8.tgz"
   integrity sha512-V2d8Wjn0VzhPHO+rrSBtcl+Fo+jUUccdlmQ6OoL9/XQB7Qk3d9lYrqKDJyccwDxmQT10JdST3Tmf2K52NLc3kw==
 
 expo-linking@~8.0.10:
@@ -3745,7 +3745,7 @@ expo-task-manager@^14.0.9, expo-task-manager@~14.0.9:
 
 expo-video-thumbnails@~10.0.8:
   version "10.0.8"
-  resolved "https://registry.yarnpkg.com/expo-video-thumbnails/-/expo-video-thumbnails-10.0.8.tgz#a6313cea8e58dd0d5041d389a4fe4fa182eab176"
+  resolved "https://registry.npmjs.org/expo-video-thumbnails/-/expo-video-thumbnails-10.0.8.tgz"
   integrity sha512-nPUtP7ERLf5DY5V2A6gquRP5rP3Uvq6+FVkDwG9R3KKhFeTYkWZ5Ce1iQ7Yt5qDNQqcUcgEqmRpGCbJmn9ckKA==
 
 expo-web-browser@~15.0.10:

@@ -11,6 +11,7 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAuthStore } from './store/authStore';
+import { VideoUtils } from './services/videoUpload';
 
 
 const PostItem = ({ item }: { item: Post }) => {
@@ -131,37 +132,58 @@ const PostItem = ({ item }: { item: Post }) => {
 export default function HomeScreen() {
   const router = useRouter();
   const [newPostText, setNewPostText] = useState('');
-  const [imageUri, setImageUri] = useState<string | null>(null); 
+  const [media, setMedia] = useState<{uri: string, type: 'image'|'video', thumbnail?: string} | null>(null);
   
   // 1. Live Query from Realm (Sorted by newest)
   const posts = useQuery(Post).sorted('timestamp', true);
   const realm = useRealm();
 
-  // 2. Pick Image Function
-  const pickImage = async () => {
+  // 2. Pick Media Function (Images & Videos)
+  const pickMedia = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.5, // Compress for faster sync
+      mediaTypes: ImagePicker.MediaTypeOptions.All, // ALLOW VIDEO
+      quality: 0.5,
+      videoMaxDuration: 60, // Limit duration to 60 seconds
     });
 
     if (!result.canceled) {
-      setImageUri(result.assets[0].uri);
+      const asset = result.assets[0];
+      
+      // Detect if it's a video by file extension or type
+      const isVideo = asset.type === 'video' || 
+                     asset.uri?.toLowerCase().endsWith('.mp4') ||
+                     asset.uri?.toLowerCase().endsWith('.mov') ||
+                     asset.uri?.toLowerCase().endsWith('.m4v');
+
+      if (isVideo) {
+        try {
+          // Generate thumbnail for video
+          console.log('🎬 Generating thumbnail for video...');
+          const thumb = await VideoUtils.generateThumbnail(asset.uri);
+          console.log('✅ Thumbnail generated:', thumb);
+          setMedia({ uri: asset.uri, type: 'video', thumbnail: thumb || undefined });
+        } catch (e) {
+          console.error('❌ Failed to generate thumbnail:', e);
+          setMedia({ uri: asset.uri, type: 'video' });
+        }
+      } else {
+        setMedia({ uri: asset.uri, type: 'image' });
+      }
     }
   };
 
   // 3. Handle New Post (Offline First)
   const handleAddPost = async () => {
-    if (!newPostText && !imageUri) return; // Don't post empty stuff
+    if (!newPostText && !media) return; // Don't post empty stuff
 
-    // Copy image to permanent location if present
-    let permanentUri = imageUri;
-    if (imageUri) {
-      const filename = imageUri.split('/').pop() || `${Date.now()}.jpg`;
+    // Copy media to permanent location if present
+    let permanentUri = media?.uri;
+    if (media?.uri) {
+      const ext = media.type === 'video' ? 'mp4' : 'jpg';
+      const filename = `${Date.now()}.${ext}`;
       const newPath = `${FileSystem.documentDirectory}${filename}`;
       await FileSystem.copyAsync({
-        from: imageUri,
+        from: media.uri,
         to: newPath,
       });
       permanentUri = newPath;
@@ -174,18 +196,19 @@ export default function HomeScreen() {
         text: newPostText,
         timestamp: new Date(),
         localUri: permanentUri ?? undefined, // Store permanent local path
+        mediaType: media?.type || 'image',
+        thumbnailUrl: media?.thumbnail,
         isSynced: false,
       });
     });
 
     // Reset Inputs UI
     setNewPostText('');
-    setImageUri(null);
+    setMedia(null);
 
     // Check Network & Trigger Background Sync
     const state = await NetInfo.fetch();
     if (state.isConnected) {
-
       console.log("⚡️ Online! Triggering immediate sync...");
       SyncEngine.pushChanges(realm); 
     }
@@ -206,7 +229,7 @@ export default function HomeScreen() {
       </View>
       <View style={styles.inputWrapper}>
         <View style={styles.inputContainer}>
-          <TouchableOpacity onPress={pickImage} style={styles.imagePickerButton}>
+          <TouchableOpacity onPress={pickMedia} style={styles.imagePickerButton}>
             <Text style={{fontSize: 22}}>📷</Text>
           </TouchableOpacity>
 
@@ -224,10 +247,16 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
-        {imageUri && (
+        {media && (
           <View style={styles.previewContainer}>
-            <Image source={{ uri: imageUri }} style={styles.previewImage} />
-            <TouchableOpacity onPress={() => setImageUri(null)} style={styles.removeButton}>
+            <Image 
+              source={{ uri: media.thumbnail || media.uri }} 
+              style={styles.previewImage} 
+            />
+            {media.type === 'video' && (
+              <Text style={{ position: 'absolute', fontSize: 24 }}>🎬</Text>
+            )}
+            <TouchableOpacity onPress={() => setMedia(null)} style={styles.removeButton}>
               <Text style={styles.removeText}>✕</Text>
             </TouchableOpacity>
           </View>

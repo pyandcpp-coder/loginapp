@@ -112,7 +112,16 @@ export const { RealmProvider, useRealm, useQuery } = createRealmContext({
   onMigration: (oldRealm, newRealm) => {
     // Migration logic - this will be called when schema version changes
     console.log('Realm migration started...');
-    // Realm will handle adding new properties with their defaults
+    
+    // Migration to v7: Add default mediaType to existing posts
+    if (oldRealm.schemaVersion < 7) {
+      const oldPosts = newRealm.objects('Post');
+      for (const post of oldPosts) {
+        if (!post.mediaType) {
+          post.mediaType = 'image';
+        }
+      }
+    }
     
     // Initialize SystemSettings if it doesn't exist
     if (newRealm.objects('SystemSettings').length === 0) {

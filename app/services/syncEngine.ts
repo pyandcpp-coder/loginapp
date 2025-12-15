@@ -1,8 +1,9 @@
 import { supabase } from './supabaseClient';
 import { Realm } from '@realm/react';
-import { Post, Like, Comment } from '../models'; 
+import { Post, Like, Comment, SystemSettings } from '../models'; 
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
+import { VideoUtils } from './videoUpload';
 
 // Exponential Backoff Retry Logic
 const RetryEngine = {
@@ -105,16 +106,34 @@ const ConflictResolver = {
 };
 
 export const SyncEngine = {
+  // 1. PUSH (Uploads)
   pushChanges: async (realm: Realm) => {
-    // 1. SYNC POSTS (Batch Operation)
+    // A. SYNC POSTS
     const unsyncedPosts = realm.objects<Post>('Post').filtered('isSynced == false');
     
     if (unsyncedPosts.length > 0) {
       console.log(`Pushing ${unsyncedPosts.length} posts...`);
       
-      // First, handle image uploads for posts with local URIs
       for (const post of unsyncedPosts) {
-        if (post.localUri && !post.remoteUrl) {
+        let publicUrl = post.remoteUrl;
+
+        // Handle VIDEO Upload
+        if (post.mediaType === 'video' && post.localUri && !post.remoteUrl) {
+          try {
+            console.log(`📹 Uploading video for post ${post._id.toHexString()}`);
+            console.log(`📁 Local URI: ${post.localUri}`);
+            publicUrl = await VideoUtils.uploadVideo(post.localUri, post._id.toHexString());
+            realm.write(() => { post.remoteUrl = publicUrl; });
+            console.log(`✅ Uploaded video for post ${post._id.toHexString()}`);
+            console.log(`🔗 Remote URL: ${publicUrl}`);
+          } catch (e) { 
+            console.error("❌ Video Upload Failed:", e); 
+            console.error("Stack:", (e as any).stack);
+            continue; 
+          }
+        }
+        // Handle IMAGE Upload (Legacy Logic)
+        else if (post.mediaType === 'image' && post.localUri && !post.remoteUrl) {
           try {
             const fileInfo = await FileSystem.getInfoAsync(post.localUri);
             if (fileInfo.exists) {
@@ -148,46 +167,43 @@ export const SyncEngine = {
             console.error(`Error uploading image for post ${post._id.toHexString()}:`, e); 
           }
         }
-      }
-      
-      // Batch insert all posts in one network call with exponential backoff
-      const postsPayload = unsyncedPosts.map(p => {
-        const payload: any = {
-          id: p._id.toHexString(),
-          text: p.text,
-          image_url: p.remoteUrl,
-          timestamp: p.timestamp.toISOString(),
-          user_email: p.userEmail,
-        };
-        
-        // Only include deleted_at if it exists
-        if (p.deletedAt) {
-          payload.deleted_at = p.deletedAt.toISOString();
+
+        // Sync Metadata to DB
+        const postsPayload = [{
+          id: post._id.toHexString(),
+          text: post.text,
+          image_url: publicUrl,
+          media_type: post.mediaType,
+          thumbnail_url: post.thumbnailUrl,
+          timestamp: post.timestamp.toISOString(),
+          user_email: post.userEmail,
+        }];
+
+        if (post.deletedAt) {
+          (postsPayload[0] as any).deleted_at = post.deletedAt.toISOString();
         }
-        
-        return payload;
-      });
-      
-      const result = await RetryEngine.executeWithBackoff(
-        async () => {
-          const { error } = await supabase.from('posts').upsert(postsPayload);
-          if (error) {
-            console.error('Supabase upsert error:', error);
-            throw error;
-          }
-          return true;
-        },
-        `Push ${unsyncedPosts.length} posts`
-      );
-      
-      if (result) {
-        realm.write(() => {
-          unsyncedPosts.forEach(p => { p.isSynced = true; });
-        });
+
+        const result = await RetryEngine.executeWithBackoff(
+          async () => {
+            const { error } = await supabase.from('posts').upsert(postsPayload);
+            if (error) {
+              console.error('Supabase upsert error:', error);
+              throw error;
+            }
+            return true;
+          },
+          `Push post ${post._id.toHexString()}`
+        );
+
+        if (result) {
+          realm.write(() => {
+            post.isSynced = true;
+          });
+        }
       }
     }
 
-    // 2. SYNC LIKES (Batch Operations - Soft Deletes with Exponential Backoff)
+    // B. SYNC LIKES (Batch Operations - Soft Deletes with Exponential Backoff)
     const unsyncedLikes = realm.objects<Like>('Like').filtered('isSynced == false');
     
     if (unsyncedLikes.length > 0) {
@@ -244,7 +260,7 @@ export const SyncEngine = {
       }
     }
 
-    // 3. SYNC COMMENTS (Batch Operations - Soft Deletes with Exponential Backoff)
+    // C. SYNC COMMENTS (Batch Operations - Soft Deletes with Exponential Backoff)
     const unsyncedComments = realm.objects<Comment>('Comment').filtered('isSynced == false');
     
     if (unsyncedComments.length > 0) {
@@ -306,149 +322,77 @@ export const SyncEngine = {
     }
   },
 
+  // 2. PULL (Downloads & Prefetching)
   pullChanges: async (realm: Realm) => {
-    // Ensure SystemSettings exists
-    let systemSettings = realm.objects('SystemSettings')[0] as any;
-    if (!systemSettings) {
-      realm.write(() => {
-        systemSettings = realm.create('SystemSettings', {
-          _id: new Realm.BSON.ObjectId(),
-          lastSyncTime: new Date(0),
-        });
+    // A. Get Last Sync Time
+    let settings = realm.objects<SystemSettings>('SystemSettings')[0];
+    if (!settings) {
+      realm.write(() => { 
+        settings = realm.create('SystemSettings', { 
+          _id: new Realm.BSON.ObjectId(), 
+          lastSyncTime: new Date(0) 
+        }) as any; 
       });
     }
-    
-    const lastSyncTime: Date = systemSettings?.lastSyncTime || new Date(0);
+    const lastSync = settings!.lastSyncTime;
 
-    // 1. PULL POSTS (only updated since last sync)
-    const { data: posts } = await supabase
-      .from('posts')
+    // B. Fetch New Metadata Only
+    const { data: posts } = await supabase.from('posts')
       .select('*')
-      .gt('updated_at', lastSyncTime.toISOString())
-      .limit(100);
-    
-    if (posts) {
-      realm.write(() => {
-        posts.forEach((remotePost) => {
-          const existingPost = realm.objectForPrimaryKey<Post>('Post', Realm.BSON.ObjectId.createFromHexString(remotePost.id));
-          
-          if (existingPost) {
-            // CONFLICT DETECTION: Post exists locally
-            console.log(`[CONFLICT] Post ${remotePost.id} exists both locally and remotely`);
-            
-            // Check if local has unsynced changes
-            if (!existingPost.isSynced) {
-              console.log(`  Local post has unsync changes, attempting merge...`);
-              // Use field-level merging for unsync changes
-              const merged = ConflictResolver.fieldLevelMerge(
-                {
-                  text: existingPost.text,
-                  image_url: existingPost.remoteUrl,
-                  timestamp: existingPost.timestamp,
-                  updated_at: existingPost.timestamp.toISOString(),
-                },
-                remotePost
-              );
-              
-              existingPost.text = merged.text;
-              existingPost.remoteUrl = merged.image_url;
-              existingPost.isSynced = true; // Mark as synced after merge
-              console.log(`  Merged successfully`);
-            } else {
-              // No local changes, use Last Write Wins
-              const resolved = ConflictResolver.lastWriteWins(existingPost, remotePost);
-              if (resolved === remotePost) {
-                existingPost.text = remotePost.text;
-                existingPost.remoteUrl = remotePost.image_url;
-                existingPost.timestamp = new Date(remotePost.timestamp);
-              }
-            }
-          } else {
-            // No conflict, create new post
-            realm.create('Post', {
-              _id: Realm.BSON.ObjectId.createFromHexString(remotePost.id),
-              text: remotePost.text,
-              timestamp: new Date(remotePost.timestamp),
-              remoteUrl: remotePost.image_url,
-              userEmail: remotePost.user_email || 'anon',
-              isSynced: true,
-            });
-          }
-        });
-      });
-    }
+      .gt('timestamp', lastSync.toISOString())
+      .limit(50);
 
-    // 2. PULL LIKES (only updated since last sync)
-    const { data: likes } = await supabase
-      .from('likes')
-      .select('*')
-      .gt('updated_at', lastSyncTime.toISOString())
-      .limit(100);
-    
-    if (likes) {
+    if (posts && posts.length > 0) {
       realm.write(() => {
-        likes.forEach((l) => {
-          const exists = realm.objectForPrimaryKey<Like>('Like', Realm.BSON.ObjectId.createFromHexString(l.id));
+        posts.forEach((p: any) => {
+          const exists = realm.objectForPrimaryKey('Post', Realm.BSON.ObjectId.createFromHexString(p.id));
           if (!exists) {
-            realm.create('Like', {
-              _id: Realm.BSON.ObjectId.createFromHexString(l.id),
-              postId: l.post_id,
-              userEmail: l.user_email,
+            realm.create('Post', {
+              _id: Realm.BSON.ObjectId.createFromHexString(p.id),
+              text: p.text,
+              timestamp: new Date(p.timestamp),
+              remoteUrl: p.image_url || p.video_url,
+              mediaType: p.media_type || 'image',
+              thumbnailUrl: p.thumbnail_url,
+              userEmail: p.user_email || 'anon',
               isSynced: true,
             });
           }
         });
+        settings!.lastSyncTime = new Date();
       });
     }
 
-    // 3. PULL COMMENTS (only updated since last sync)
-    const { data: comments } = await supabase
-      .from('comments')
-      .select('*')
-      .gt('updated_at', lastSyncTime.toISOString())
-      .limit(100);
-    
-    if (comments) {
-      realm.write(() => {
-        comments.forEach((remoteComment) => {
-          const exists = realm.objectForPrimaryKey<Comment>('Comment', Realm.BSON.ObjectId.createFromHexString(remoteComment.id));
-          
-          if (exists && !exists.isSynced) {
-            // Conflict: Both local and remote have changes to comment
-            console.log(`[CONFLICT] Comment ${remoteComment.id} has local unsync changes`);
-            const merged = ConflictResolver.fieldLevelMerge(
-              {
-                text: exists.text,
-                timestamp: exists.timestamp,
-                updated_at: exists.timestamp.toISOString(),
-              },
-              remoteComment
-            );
-            
-            exists.text = merged.text;
-            exists.isSynced = true;
-            console.log(`  Comment merged successfully`);
-          } else if (!exists) {
-            realm.create('Comment', {
-              _id: Realm.BSON.ObjectId.createFromHexString(remoteComment.id),
-              postId: remoteComment.post_id,
-              userEmail: remoteComment.user_email,
-              text: remoteComment.text,
-              timestamp: new Date(remoteComment.created_at),
-              isSynced: true,
-            });
-          }
+    // C. "NEXT 5" PREFETCH STRATEGY (The Magic)
+    await SyncEngine.prefetchVideos(realm);
+  },
+
+  prefetchVideos: async (realm: Realm) => {
+    // Find top 5 videos that have a remote URL but NO local URI
+    const videosToDownload = realm.objects<Post>('Post')
+      .filtered("mediaType == 'video' AND localUri == null AND remoteUrl != null")
+      .sorted('timestamp', true) // Newest first
+      .slice(0, 5);
+
+    for (const video of videosToDownload) {
+      try {
+        const fileDir = FileSystem.documentDirectory + 'videos/';
+        await FileSystem.makeDirectoryAsync(fileDir, { intermediates: true });
+        
+        const fileName = `${video._id.toHexString()}.mp4`;
+        const localLoc = fileDir + fileName;
+
+        // Download in background
+        const { uri } = await FileSystem.downloadAsync(video.remoteUrl!, localLoc);
+        
+        realm.write(() => {
+          video.localUri = uri;
         });
-      });
-    }
-
-    // Update last sync timestamp
-    realm.write(() => {
-      const settings = realm.objects('SystemSettings')[0] as any;
-      if (settings) {
-        settings.lastSyncTime = new Date();
+        console.log(`Prefetched video: ${fileName}`);
+      } catch (e) {
+        console.error("Prefetch failed", e);
       }
-    });
+    }
   },
 
   pruneData: async (realm: Realm) => {
@@ -489,19 +433,13 @@ export const SyncEngine = {
 
       // 3. Delete associated comments from deleted posts
       const existingPostIds = new Set(realm.objects<Post>('Post').map(p => p._id.toHexString()));
-      const orphanedComments = realm.objects<Comment>('Comment').filtered('deletedAt == null AND isSynced == true');
-      const commentsToDelete = orphanedComments.filter(c => !existingPostIds.has(c.postId));
-      if (commentsToDelete.length > 0) {
-        console.log(`🔗 Deleting ${commentsToDelete.length} orphaned comments (post was deleted)...`);
-        realm.delete(commentsToDelete);
-      }
-
-      // 4. Delete associated likes from deleted posts
-      const orphanedLikes = realm.objects<Like>('Like').filtered('deletedAt == null AND isSynced == true');
-      const likesToDelete = orphanedLikes.filter(l => !existingPostIds.has(l.postId));
-      if (likesToDelete.length > 0) {
-        console.log(`🔗 Deleting ${likesToDelete.length} orphaned likes (post was deleted)...`);
-        realm.delete(likesToDelete);
+      const allComments = Array.from(realm.objects<Comment>('Comment'));
+      const orphanedComments = allComments.filter((comment: Comment) => {
+        return !existingPostIds.has(comment.postId);
+      });
+      if (orphanedComments.length > 0) {
+        console.log(`🧹 Deleting ${orphanedComments.length} orphaned comments...`);
+        realm.delete(orphanedComments);
       }
     });
   }

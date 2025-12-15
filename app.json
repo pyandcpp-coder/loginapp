@@ -41,6 +41,13 @@
           }
         }
       ],
+      [
+        "expo-background-fetch",
+        {
+          "minimumInterval": 900
+        }
+      ],
+      "expo-task-manager",
       "expo-sqlite"
     ],
     "experiments": {
