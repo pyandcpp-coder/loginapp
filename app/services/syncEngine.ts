@@ -1,111 +1,130 @@
 import { supabase } from './supabaseClient';
 import { Realm } from '@realm/react';
-import { Post } from '../models'; 
+import { Post,Like,Comment } from '../models'; 
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode as base64ToArrayBuffer } from 'base64-arraybuffer';
 
 export const SyncEngine = {
-  //Send local offline posts to the cloud
   pushChanges: async (realm: Realm) => {
+    // 1. SYNC POSTS
     const unsyncedPosts = realm.objects<Post>('Post').filtered('isSynced == false');
-
-    if (unsyncedPosts.length === 0) return; // Nothing to do
-
-    console.log(`Pushing ${unsyncedPosts.length} posts to cloud...`);
-
-    for (const post of unsyncedPosts) {
-      let publicUrl = post.remoteUrl; 
-
-      if (post.localUri && !post.remoteUrl) {
-        console.log(" Uploading image...");
-        try {
-          // Check if file exists first
-          const fileInfo = await FileSystem.getInfoAsync(post.localUri);
-          if (!fileInfo.exists) {
-            console.warn("File no longer exists, marking as synced without image:", post.localUri);
-            realm.write(() => {
-              post.localUri = undefined; // Clear the bad path
-              post.isSynced = true; // Mark as synced so we don't retry
-            });
-            continue;
+    
+    if (unsyncedPosts.length > 0) {
+      console.log(`Pushing ${unsyncedPosts.length} posts...`);
+      for (const post of unsyncedPosts) {
+        let publicUrl = post.remoteUrl;
+        
+        if (post.localUri && !post.remoteUrl) {
+          try {
+            const fileInfo = await FileSystem.getInfoAsync(post.localUri);
+            if (fileInfo.exists) {
+              const base64 = await FileSystem.readAsStringAsync(post.localUri, { encoding: FileSystem.EncodingType.Base64 });
+              const fileName = `${post._id.toHexString()}.jpg`;
+              await supabase.storage.from('media').upload(fileName, base64ToArrayBuffer(base64), { contentType: 'image/jpeg', upsert: true });
+              const { data } = supabase.storage.from('media').getPublicUrl(fileName);
+              publicUrl = data.publicUrl;
+              realm.write(() => { post.remoteUrl = publicUrl; });
+            }
+          } catch (e) { 
+            console.error(e); 
+            continue; 
           }
+        }
 
-          // Use legacy FileSystem API
-          const base64 = await FileSystem.readAsStringAsync(post.localUri, {
-            encoding: FileSystem.EncodingType.Base64,
-          });
-          
-          const fileName = `${post._id.toHexString()}.jpg`;
-          
-
-          // Convert base64 string to ArrayBuffer
-          const arrayBuffer = base64ToArrayBuffer(base64);
-
-          const { data, error: uploadError } = await supabase.storage
-            .from('media') // The bucket we created
-            .upload(fileName, arrayBuffer, {
-              contentType: 'image/jpeg',
-              upsert: true
-            });
-
-          if (uploadError) throw uploadError;
-          const { data: urlData } = supabase.storage.from('media').getPublicUrl(fileName);
-          publicUrl = urlData.publicUrl;
-          realm.write(() => {
-            post.remoteUrl = publicUrl;
-          });
-        } catch (e) {
-          console.error("Image upload failed", e);
-          continue; // Skip this post, try again next sync
+        const { error } = await supabase.from('posts').insert({
+          id: post._id.toHexString(),
+          text: post.text,
+          image_url: publicUrl,
+          timestamp: post.timestamp.toISOString(),
+          user_email:post.userEmail,
+        });
+        if (!error || error.code === '23505') {
+          realm.write(() => { post.isSynced = true; });
         }
       }
+    }
 
-      // 2. Upload the Post Data (Text + Image URL)
-      const { error } = await supabase.from('posts').insert({
-        id: post._id.toHexString(),
-        text: post.text,
-        image_url: publicUrl, // Send the Supabase URL
-        timestamp: post.timestamp.toISOString(),
-      });
-
-      if (!error || (error && error.code === '23505')) {
-        // If upload success, or duplicate key (already exists), mark as synced locally!
-        realm.write(() => {
-          post.isSynced = true;
-        });
-        if (error && error.code === '23505') {
-          console.warn('Post already exists in cloud, marking as synced:', post._id.toHexString());
+    // 2. SYNC LIKES (Handle Deletions!)
+    const unsyncedLikes = realm.objects<Like>('Like').filtered('isSynced == false');
+    for (const like of unsyncedLikes) {
+      if (like.isDeleted) {
+        // DELETE FROM SERVER
+        const { error } = await supabase.from('likes').delete().match({ id: like._id.toHexString() });
+        if (!error) {
+          realm.write(() => { realm.delete(like); }); // Actually delete locally now
         }
       } else {
-        console.error("Post upload failed", error);
+        // INSERT TO SERVER
+        const { error } = await supabase.from('likes').insert({
+          id: like._id.toHexString(),
+          post_id: like.postId,
+          user_email: like.userEmail,
+        });
+        if (!error || error.code === '23505') {
+          realm.write(() => { like.isSynced = true; });
+        }
       }
     }
   },
-  // 2. PULL: new posts from the cloud
+
   pullChanges: async (realm: Realm) => {
-    console.log("⬇️ Pulling data from cloud...");
-    
-    const { data, error } = await supabase
-      .from('posts')
-      .select('*')
-      .order('timestamp', { ascending: false })
-      .limit(50); // Get last 50 posts
-
-    if (error || !data) return;
-
-    realm.write(() => {
-      data.forEach((serverPost) => {
-        const exists = realm.objectForPrimaryKey('Post', Realm.BSON.ObjectId.createFromHexString(serverPost.id));
-        if (!exists) {
-          realm.create('Post', {
-            _id: Realm.BSON.ObjectId.createFromHexString(serverPost.id),
-            text: serverPost.text,
-            timestamp: new Date(serverPost.timestamp),
-            remoteUrl: serverPost.image_url, // <--- Map this!
-            isSynced: true,
-          });
-        }
+    // 1. PULL POSTS
+    const { data: posts } = await supabase.from('posts').select('*').limit(50);
+    if (posts) {
+      realm.write(() => {
+        posts.forEach((p) => {
+          const exists = realm.objectForPrimaryKey('Post', Realm.BSON.ObjectId.createFromHexString(p.id));
+          if (!exists) {
+            realm.create('Post', {
+              _id: Realm.BSON.ObjectId.createFromHexString(p.id),
+              text: p.text,
+              timestamp: new Date(p.timestamp),
+              remoteUrl: p.image_url,
+              userEmail: p.user_email|| 'anon',
+              isSynced: true,
+            });
+          }
+        });
       });
-    });
+    }
+
+    // 2. PULL LIKES (For the posts we have)
+    const { data: likes } = await supabase.from('likes').select('*').limit(100);
+    if (likes) {
+      realm.write(() => {
+        likes.forEach((l) => {
+          const exists = realm.objectForPrimaryKey('Like', Realm.BSON.ObjectId.createFromHexString(l.id));
+          if (!exists) {
+            realm.create('Like', {
+              _id: Realm.BSON.ObjectId.createFromHexString(l.id),
+              postId: l.post_id,
+              userEmail: l.user_email,
+              isSynced: true,
+              isDeleted: false,
+            });
+          }
+        });
+      });
+    }
+
+    // 3. PULL COMMENTS
+    const { data: comments } = await supabase.from('comments').select('*').limit(100);
+    if (comments) {
+      realm.write(() => {
+        comments.forEach((c) => {
+          const exists = realm.objectForPrimaryKey('Comment', Realm.BSON.ObjectId.createFromHexString(c.id));
+          if (!exists) {
+            realm.create('Comment', {
+              _id: Realm.BSON.ObjectId.createFromHexString(c.id),
+              postId: c.post_id,
+              userEmail: c.user_email,
+              text: c.text,
+              timestamp: new Date(c.created_at),
+              isSynced: true,
+            });
+          }
+        });
+      });
+    }
   }
 };

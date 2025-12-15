@@ -1,6 +1,7 @@
 import { Realm, createRealmContext } from '@realm/react';
 import * as SecureStore from 'expo-secure-store';
 import 'react-native-get-random-values'; 
+import { StyleBuilderConfig } from 'react-native-reanimated/lib/typescript/css/native';
 export class Post extends Realm.Object<Post> {
   _id!: Realm.BSON.ObjectId;
   text!: string;
@@ -8,6 +9,7 @@ export class Post extends Realm.Object<Post> {
   isSynced!: boolean;
   localUri?: string;
   remoteUrl?: string;
+  userEmail!:string;
 
   static schema: Realm.ObjectSchema = {
     name: 'Post',
@@ -18,6 +20,51 @@ export class Post extends Realm.Object<Post> {
       isSynced: { type: 'bool', default: false },
       localUri: 'string?',
       remoteUrl:'string?',
+      userEmail:{type:'string',default:'anon'}
+    },
+    primaryKey: '_id',
+  };
+}
+export class Like extends Realm.Object<Like> {
+  _id!: Realm.BSON.ObjectId;
+  postId!: string;
+  userEmail!: string;
+  isSynced!: boolean;
+  isDeleted!: boolean;
+
+  static schema: Realm.ObjectSchema = {
+    name: 'Like',
+    properties: {
+      _id: 'objectId',
+      postId: 'string',
+      userEmail: 'string',
+      isSynced: { type: 'bool', default: false },
+      isDeleted:{type:'bool',default:false},
+    },
+    primaryKey: '_id',
+  };
+}
+
+export class Comment extends Realm.Object<Comment> {
+  _id!: Realm.BSON.ObjectId;
+  postId!: string;
+  userEmail!: string;
+  text!: string;
+  timestamp!: Date;
+  isSynced!: boolean;
+  isDeleted!: boolean;
+
+
+  static schema: Realm.ObjectSchema = {
+    name: 'Comment',
+    properties: {
+      _id: 'objectId',
+      postId: 'string',
+      userEmail: 'string',
+      text: 'string',
+      timestamp: 'date',
+      isSynced: { type: 'bool', default: false },
+      isDeleted: {type: 'bool', default:false},
     },
     primaryKey: '_id',
   };
@@ -39,6 +86,11 @@ async function getRealmKey(): Promise<ArrayBuffer> {
 
 
 export const { RealmProvider, useRealm, useQuery } = createRealmContext({
-  schema: [Post],
-  schemaVersion: 2,
+  schema: [Post,Like,Comment],
+  schemaVersion: 5,
+  onMigration: (oldRealm, newRealm) => {
+    // Migration logic - this will be called when schema version changes
+    console.log('Realm migration started...');
+    // No data transformation needed, Realm will handle adding the new properties with their defaults
+  },
 });

@@ -1,16 +1,135 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Button, TextInput, TouchableOpacity } from 'react-native';
-import { useRouter } from 'expo-router';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, SafeAreaView } from 'react-native';
+import { useRouter, Link } from 'expo-router';
 import { Realm } from '@realm/react';
-import { useRealm, useQuery, Post } from './models';
+import { useRealm, useQuery, Post, Like, Comment } from './models';
 import { FlashList } from "@shopify/flash-list";
 import Animated, { FadeInDown, Layout } from 'react-native-reanimated';
 import NetInfo from '@react-native-community/netinfo';
 import { SyncEngine } from './services/syncEngine';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system/legacy'; 
+import * as FileSystem from 'expo-file-system/legacy';
+import { useAuthStore } from './store/authStore';
 
+
+const PostItem = ({ item }: { item: Post }) => {
+  const realm = useRealm();
+  const { user } = useAuthStore();
+  const [commentText, setCommentText] = useState('');
+  const [showComments, setShowComments] = useState(false);
+
+  // Live Queries for THIS post
+  // FIX: Only count likes that are NOT deleted
+  const likes = useQuery(Like).filtered('postId == $0 AND isDeleted == false', item._id.toHexString());
+  const comments = useQuery(Comment).filtered('postId == $0', item._id.toHexString()).sorted('timestamp');
+  
+  const myLike = likes.find(l => l.userEmail === user?.email);
+  const isLiked = !!myLike;
+
+  const toggleLike = () => {
+    realm.write(() => {
+      if (myLike) {
+        // BUG FIX: Don't delete! Mark as deleted.
+        // If it was already syncing (true), set to false so sync engine catches it.
+        myLike.isDeleted = true;
+        myLike.isSynced = false;
+      } else {
+        // Check if we have a "Deleted" like we can resurrect (optimization)
+        const deletedLike = realm.objects<Like>('Like').filtered('postId == $0 AND userEmail == $1 AND isDeleted == true', item._id.toHexString(), user?.email)[0];
+        
+        if (deletedLike) {
+          deletedLike.isDeleted = false;
+          deletedLike.isSynced = false;
+        } else {
+          realm.create('Like', {
+            _id: new Realm.BSON.ObjectId(),
+            postId: item._id.toHexString(),
+            userEmail: user?.email || 'anon',
+            isSynced: false,
+            isDeleted: false,
+          });
+        }
+      }
+    });
+    // Trigger sync silently
+    SyncEngine.pushChanges(realm);
+  };
+
+  const addComment = () => {
+    if (!commentText) return;
+    realm.write(() => {
+      realm.create('Comment', {
+        _id: new Realm.BSON.ObjectId(),
+        postId: item._id.toHexString(),
+        userEmail: user?.email || 'anon',
+        text: commentText,
+        timestamp: new Date(),
+        isSynced: false,
+      });
+    });
+    setCommentText('');
+    SyncEngine.pushChanges(realm);
+  };
+
+  return (
+    <Animated.View 
+      style={styles.postCard}
+    >
+      {(item.localUri || item.remoteUrl) && (
+        <Image 
+          source={{ uri: item.localUri || item.remoteUrl }} 
+          style={styles.postImage}
+          contentFit="cover"
+        />
+      )}
+      <Text style={styles.postText}>{item.text}</Text>
+      
+      {/* Action Bar */}
+      <View style={styles.actionBar}>
+        <TouchableOpacity onPress={toggleLike} style={styles.actionButton}>
+          <Text style={{fontSize: 18}}>{isLiked ? "❤️" : "🤍"}</Text>
+          <Text style={styles.actionText}>{likes.length} Likes</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity onPress={() => setShowComments(!showComments)} style={styles.actionButton}>
+          <Text style={{fontSize: 18}}>💬</Text>
+          <Text style={styles.actionText}>{comments.length} Comments</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Comments Section */}
+      {showComments && (
+        <View style={styles.commentSection}>
+          {Array.from(comments).map((c) => (
+            <View key={c._id.toHexString()} style={styles.commentRow}>
+              <Text style={styles.commentUser}>{c.userEmail.split('@')[0]}: </Text>
+              <Text style={styles.commentText}>{c.text}</Text>
+            </View>
+          ))}
+          <View style={styles.commentInputRow}>
+            <TextInput 
+              style={styles.commentInput} 
+              placeholder="Add a comment..."
+              value={commentText}
+              onChangeText={setCommentText}
+              placeholderTextColor="#999"
+            />
+            <TouchableOpacity style={styles.sendButton} onPress={addComment}>
+              <Text style={styles.sendButtonText}>Send</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+      
+      <Text style={styles.postDate}>
+        {item.timestamp.toLocaleTimeString()} • {item.isSynced ? "✅" : "⏳"}
+      </Text>
+    </Animated.View>
+  );
+};
+
+// --- MAIN SCREEN ---
 export default function HomeScreen() {
   const router = useRouter();
   const [newPostText, setNewPostText] = useState('');
@@ -68,45 +187,29 @@ export default function HomeScreen() {
     // Check Network & Trigger Background Sync
     const state = await NetInfo.fetch();
     if (state.isConnected) {
+      
       console.log("⚡️ Online! Triggering immediate sync...");
       SyncEngine.pushChanges(realm); 
     }
   };
 
-  // 4. Render Individual Post Item
-  const renderItem = ({ item }: { item: Post }) => (
-    <Animated.View 
-      entering={FadeInDown.delay(100).duration(500)} 
-      layout={Layout.springify()} 
-      style={styles.postCard}
-    >
-      {/* Show Image: Prefer Local, fallback to Remote */}
-      {(item.localUri || item.remoteUrl) && (
-        <Image 
-          source={{ uri: item.localUri || item.remoteUrl }} 
-          style={styles.postImage}
-          contentFit="cover"
-          transition={500}
-        />
-      )}
-      
-      <Text style={styles.postText}>{item.text}</Text>
-      <Text style={styles.postDate}>
-        {item.timestamp.toLocaleTimeString()} • {item.isSynced ? "✅ Synced" : "⏳ Offline"}
-      </Text>
-    </Animated.View>
-  );
-
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Social Feed 📸</Text>
-        <Button title="Logout" onPress={() => router.replace('/login')} />
+        <Link href="/profile" asChild>
+          <TouchableOpacity style={styles.profileButton}>
+            <Text style={styles.profileEmoji}>👤</Text>
+          </TouchableOpacity>
+        </Link>
+        <Text style={styles.title}>Social Feed</Text>
+        <TouchableOpacity style={styles.logoutButton} onPress={() => router.replace('/login')}>
+          <Text style={styles.logoutText}>Logout</Text>
+        </TouchableOpacity>
       </View>
       <View style={styles.inputWrapper}>
         <View style={styles.inputContainer}>
-          <TouchableOpacity onPress={pickImage} style={styles.iconButton}>
-            <Text style={{fontSize: 24}}>📷</Text>
+          <TouchableOpacity onPress={pickImage} style={styles.imagePickerButton}>
+            <Text style={{fontSize: 22}}>📷</Text>
           </TouchableOpacity>
 
           <TextInput
@@ -115,78 +218,245 @@ export default function HomeScreen() {
             value={newPostText}
             onChangeText={setNewPostText}
             multiline
+            placeholderTextColor="#999"
           />
           
-          <Button title="Post" onPress={handleAddPost} />
+          <TouchableOpacity style={styles.postButton} onPress={handleAddPost}>
+            <Text style={styles.postButtonText}>Post</Text>
+          </TouchableOpacity>
         </View>
 
-        {/* Small Preview if image is selected */}
         {imageUri && (
           <View style={styles.previewContainer}>
             <Image source={{ uri: imageUri }} style={styles.previewImage} />
-            <TouchableOpacity onPress={() => setImageUri(null)}>
-              <Text style={{color: 'red', marginLeft: 10}}>❌ Remove</Text>
+            <TouchableOpacity onPress={() => setImageUri(null)} style={styles.removeButton}>
+              <Text style={styles.removeText}>✕</Text>
             </TouchableOpacity>
           </View>
         )}
       </View>
 
-      {/* High Performance List */}
       <View style={styles.listContainer}>
         <FlashList
-          data={posts}
-          renderItem={renderItem}
-          estimatedItemSize={150}
+          data={Array.from(posts)}
+          renderItem={({ item }) => <PostItem item={item} />}
           keyExtractor={(item) => item._id.toHexString()}
         />
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f0f2f5', paddingTop: 50 },
-  header: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    paddingHorizontal: 20, 
-    paddingBottom: 10,
+  container: {
+    flex: 1,
+    backgroundColor: '#f8f9ff',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     alignItems: 'center',
     backgroundColor: '#fff',
     borderBottomWidth: 1,
-    borderBottomColor: '#eee'
+    borderBottomColor: '#e0e0e0',
   },
-  title: { fontSize: 22, fontWeight: '800', color: '#1a1a1a' },
-  
-  inputWrapper: { backgroundColor: '#fff', padding: 10, marginBottom: 10, elevation: 2 },
-  inputContainer: { flexDirection: 'row', alignItems: 'center' },
-  iconButton: { marginRight: 10, padding: 5 },
-  input: { 
-    flex: 1, 
-    backgroundColor: '#f9f9f9', 
-    borderRadius: 20, 
-    paddingHorizontal: 15, 
-    paddingVertical: 8, 
-    marginRight: 10, 
-    fontSize: 16 
+  profileButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#f0f0f0',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  
-  previewContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 10, paddingLeft: 10 },
-  previewImage: { width: 60, height: 60, borderRadius: 8 },
-
-  listContainer: { flex: 1, paddingHorizontal: 10 },
-  postCard: { 
-    backgroundColor: '#fff', 
-    padding: 15, 
-    marginBottom: 15, 
-    borderRadius: 15, 
-    shadowColor: "#000", 
+  profileEmoji: {
+    fontSize: 22,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#1a1a1a',
+    flex: 1,
+    textAlign: 'center',
+  },
+  logoutButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: '#ff3b30',
+    borderRadius: 8,
+  },
+  logoutText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  inputWrapper: {
+    backgroundColor: '#fff',
+    padding: 12,
+    marginBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+    elevation: 2,
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  imagePickerButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#f0f0f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  input: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: '#1a1a1a',
+    maxHeight: 100,
+  },
+  postButton: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    justifyContent: 'center',
+  },
+  postButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  previewContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    paddingLeft: 12,
+  },
+  previewImage: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    marginRight: 12,
+  },
+  removeButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#ff3b30',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  removeText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  listContainer: {
+    flex: 1,
+    paddingHorizontal: 8,
+  },
+  postCard: {
+    backgroundColor: '#fff',
+    padding: 16,
+    marginBottom: 12,
+    borderRadius: 16,
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1, 
-    shadowRadius: 4, 
-    elevation: 3 
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
   },
-  postImage: { width: '100%', height: 250, borderRadius: 10, marginBottom: 10 },
-  postText: { fontSize: 16, marginBottom: 8, color: '#333', lineHeight: 22 },
-  postDate: { fontSize: 12, color: '#888', fontWeight: '500' }
+  postImage: {
+    width: '100%',
+    height: 240,
+    borderRadius: 12,
+    marginBottom: 12,
+    backgroundColor: '#f0f0f0',
+  },
+  postText: {
+    fontSize: 16,
+    marginBottom: 12,
+    color: '#1a1a1a',
+    lineHeight: 24,
+    fontWeight: '500',
+  },
+  postDate: {
+    fontSize: 12,
+    color: '#999',
+    fontWeight: '500',
+    marginTop: 8,
+  },
+  actionBar: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+    marginTop: 12,
+    paddingTop: 12,
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 24,
+  },
+  actionText: {
+    marginLeft: 6,
+    color: '#555',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  commentSection: {
+    marginTop: 12,
+    backgroundColor: '#f9f9f9',
+    padding: 12,
+    borderRadius: 12,
+  },
+  commentRow: {
+    flexDirection: 'row',
+    marginBottom: 8,
+  },
+  commentUser: {
+    fontWeight: '700',
+    color: '#1a1a1a',
+    marginRight: 4,
+  },
+  commentText: {
+    color: '#333',
+    fontSize: 14,
+    flex: 1,
+  },
+  commentInputRow: {
+    flexDirection: 'row',
+    marginTop: 12,
+    alignItems: 'center',
+    gap: 8,
+  },
+  commentInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    height: 36,
+    backgroundColor: '#fff',
+    fontSize: 13,
+  },
+  sendButton: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  sendButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
 });
