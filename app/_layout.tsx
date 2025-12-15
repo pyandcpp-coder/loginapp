@@ -15,7 +15,7 @@ function AppLogic() {
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      router.replace('/home');
+      router.replace('/tabs');
     }
   }, [isAuthenticated, isLoading]);
 

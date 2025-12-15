@@ -2,6 +2,8 @@ import { Realm, createRealmContext } from '@realm/react';
 import * as SecureStore from 'expo-secure-store';
 import 'react-native-get-random-values'; 
 import { StyleBuilderConfig } from 'react-native-reanimated/lib/typescript/css/native';
+
+
 export class Post extends Realm.Object<Post> {
   _id!: Realm.BSON.ObjectId;
   text!: string;
@@ -11,6 +13,8 @@ export class Post extends Realm.Object<Post> {
   localUri?: string;
   remoteUrl?: string;
   userEmail!:string;
+  mediaType!: string;
+  thumbnailUrl?: string;
 
   static schema: Realm.ObjectSchema = {
     name: 'Post',
@@ -22,7 +26,9 @@ export class Post extends Realm.Object<Post> {
       deletedAt: 'date?',
       localUri: 'string?',
       remoteUrl:'string?',
-      userEmail:{type:'string',default:'anon'}
+      userEmail:{type:'string',default:'anon'},
+      mediaType:{type:'string',default:'image'},
+      thumbnailUrl:'string?',
     },
     primaryKey: '_id',
   };
@@ -102,7 +108,7 @@ async function getRealmKey(): Promise<ArrayBuffer> {
 
 export const { RealmProvider, useRealm, useQuery } = createRealmContext({
   schema: [Post, Like, Comment, SystemSettings],
-  schemaVersion: 6,
+  schemaVersion: 7,
   onMigration: (oldRealm, newRealm) => {
     // Migration logic - this will be called when schema version changes
     console.log('Realm migration started...');
