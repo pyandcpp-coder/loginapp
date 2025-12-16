@@ -2,6 +2,7 @@ import { Comment, Like, Post, useQuery, useRealm } from '@/src/models';
 import { SyncEngine } from '@/src/services/syncEngine';
 import { useAuthStore } from '@/src/store/authStore';
 import { Ionicons } from '@expo/vector-icons';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { Realm } from '@realm/react';
 import { FlashList, ViewToken } from "@shopify/flash-list";
 import * as FileSystem from 'expo-file-system/legacy';
@@ -21,9 +22,6 @@ import {
 } from 'react-native';
 
 const { width, height: WINDOW_HEIGHT } = Dimensions.get('window');
-// Calculate height to fit strictly within tab bar constraints if needed, 
-// or use WINDOW_HEIGHT for full immersive feel.
-const SCREEN_HEIGHT = Platform.OS === 'ios' ? WINDOW_HEIGHT - 80 : WINDOW_HEIGHT - 50;
 
 // --- 1. HEADER COMPONENT ---
 const FeedHeader = () => (
@@ -94,10 +92,16 @@ const FeedSideBar = ({ item }: { item: Post }) => {
       </TouchableOpacity>
 
       <View style={styles.rotatingDisc}>
-        <Image 
-          source={{ uri: item.thumbnailUrl || 'https://via.placeholder.com/50' }} 
-          style={styles.discImage} 
-        />
+        {item.thumbnailUrl ? (
+          <Image 
+            source={{ uri: item.thumbnailUrl }} 
+            style={styles.discImage} 
+          />
+        ) : (
+          <View style={[styles.discImage, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#333' }]}>
+            <Text style={{ fontSize: 20 }}>🎬</Text>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -132,7 +136,7 @@ const FeedFooter = ({ item }: { item: Post }) => {
 };
 
 // --- 4. VIDEO COMPONENT (The Core Logic) ---
-const VideoComponent = React.memo(({ item, isVisible }: { item: Post, isVisible: boolean }) => {
+const VideoComponent = React.memo(({ item, isVisible, height }: { item: Post, isVisible: boolean, height: number }) => {
   // 1. BUILD PATH
   // Remember Lesson 1? Re-build the path if it's local!
   const sourceUri = item.localUri 
@@ -154,7 +158,7 @@ const VideoComponent = React.memo(({ item, isVisible }: { item: Post, isVisible:
   }, [isVisible, player]);
 
   return (
-    <View style={[styles.videoContainer, { height: SCREEN_HEIGHT }]}>
+    <View style={[styles.videoContainer, { height: height }]}>
       <VideoView
         player={player}
         style={styles.video}
@@ -169,16 +173,16 @@ const VideoComponent = React.memo(({ item, isVisible }: { item: Post, isVisible:
       />
     </View>
   );
-}, (prev, next) => prev.isVisible === next.isVisible && prev.item._id.equals(next.item._id));
+}, (prev, next) => prev.isVisible === next.isVisible && prev.item._id.equals(next.item._id) && prev.height === next.height);
 
 
 // --- 5. MAIN FEED ROW ---
-const FeedRow = React.memo(({ item, index, visibleIndex }: { item: Post, index: number, visibleIndex: number | null }) => {
+const FeedRow = React.memo(({ item, index, visibleIndex, height }: { item: Post, index: number, visibleIndex: number | null, height: number }) => {
   const isVisible = visibleIndex === index;
 
   return (
-    <View style={{ height: SCREEN_HEIGHT, width: width, backgroundColor: 'black' }}>
-      <VideoComponent item={item} isVisible={isVisible} />
+    <View style={{ height: height, width: width, backgroundColor: 'black' }}>
+      <VideoComponent item={item} isVisible={isVisible} height={height} />
       <FeedHeader /> 
       <FeedSideBar item={item} />
       <FeedFooter item={item} />
@@ -190,6 +194,13 @@ const FeedRow = React.memo(({ item, index, visibleIndex }: { item: Post, index: 
 export default function ReelsScreen() {
   const reels = useQuery(Post).filtered("mediaType == 'video'").sorted('timestamp', true);
   const [currentInfo, setCurrentInfo] = useState<number | null>(0);
+  
+  // 1. Get exact heights
+  const tabBarHeight = useBottomTabBarHeight();
+  
+  // 2. Calculate the actual height available for the video
+  // If you want the video to sit ABOVE the tab bar:
+  const CONTAINER_HEIGHT = WINDOW_HEIGHT - tabBarHeight;
 
   const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken<Post>[] }) => {
     if (viewableItems.length > 0 && viewableItems[0].index !== null) {
@@ -214,16 +225,25 @@ export default function ReelsScreen() {
       <StatusBar barStyle="light-content" />
       <FlashList
         data={Array.from(reels)}
+        // 3. Pass the calculated height to the Item
         renderItem={({ item, index }) => (
-          <FeedRow item={item} index={index} visibleIndex={currentInfo} />
+          <FeedRow 
+            item={item} 
+            index={index} 
+            visibleIndex={currentInfo}
+            height={CONTAINER_HEIGHT}
+          />
         )}
         pagingEnabled
         decelerationRate="fast"
+        // 4. Force strict snapping
+        snapToInterval={CONTAINER_HEIGHT}
+        snapToAlignment="start"
         keyExtractor={(item) => item._id.toHexString()}
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
         showsVerticalScrollIndicator={false}
-        drawDistance={WINDOW_HEIGHT} // Load minimal items offscreen
+        drawDistance={WINDOW_HEIGHT}
       />
     </View>
   );

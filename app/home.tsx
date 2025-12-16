@@ -1,6 +1,5 @@
 import { Comment, Like, Post, useQuery, useRealm } from '@/src/models';
 import { SyncEngine } from '@/src/services/syncEngine';
-import { VideoUtils } from '@/src/services/videoUpload';
 import { useAuthStore } from '@/src/store/authStore';
 import NetInfo from '@react-native-community/netinfo';
 import { Realm } from '@realm/react';
@@ -27,9 +26,26 @@ const PostItem = ({ item }: { item: Post }) => {
   
   const myLike = likes.find(l => l.userEmail === user?.email);
   const isLiked = !!myLike;
-  const videoSource = item.mediaType === 'video' ? (item.localUri || item.remoteUrl || '') : '';
-  const player = useVideoPlayer(videoSource, player => {
-    if (player && videoSource) {
+  
+  // 1. ROBUST VIDEO DETECTION
+  // Check the label OR the file extension
+  const isVideo = item.mediaType === 'video' || 
+                  item.localUri?.endsWith('.mp4') || 
+                  item.localUri?.endsWith('.mov') || 
+                  item.localUri?.endsWith('.m4v') ||
+                  item.remoteUrl?.endsWith('.mp4') || 
+                  item.remoteUrl?.endsWith('.mov') ||
+                  item.remoteUrl?.endsWith('.m4v');
+  
+  // 2. CONSTRUCT SOURCE URI
+  // Remember Lesson 1: Rebuild local paths dynamically!
+  const fileUri = item.localUri 
+    ? `${FileSystem.documentDirectory}${item.localUri}` 
+    : item.remoteUrl;
+  
+  // 3. SETUP PLAYER (Only if it is a video)
+  const player = useVideoPlayer(isVideo && fileUri ? fileUri : '', player => {
+    if (player && isVideo && fileUri) {
       player.loop = true;
       player.muted = true; // Auto-play muted in feed is standard
       // player.play(); // Uncomment if you want auto-play in feed
@@ -84,20 +100,22 @@ const PostItem = ({ item }: { item: Post }) => {
       style={styles.postCard}
     >
       {/* CONDITIONAL RENDERING: Video vs Image */}
-      {item.mediaType === 'video' ? (
+      {isVideo ? (
         <View style={styles.postImage}>
           <VideoView 
             player={player} 
             style={{ width: '100%', height: '100%' }} 
             contentFit="cover"
-            nativeControls={false}
+            nativeControls={true}
           />
+          {/* Optional: Add a small '🎬' icon in the corner so users know it's a video */}
+          <Text style={{ position: 'absolute', top: 10, right: 10, fontSize: 20 }}>🎬</Text>
         </View>
       ) : (
-        /* Image rendering */
-        (item.localUri || item.remoteUrl) && (
+        /* Image Fallback */
+        fileUri && (
           <Image 
-            source={{ uri: item.localUri || item.remoteUrl }} 
+            source={{ uri: fileUri }} 
             style={styles.postImage}
             contentFit="cover"
           />
@@ -153,7 +171,7 @@ const PostItem = ({ item }: { item: Post }) => {
 export default function HomeScreen() {
   const router = useRouter();
   const [newPostText, setNewPostText] = useState('');
-  const [media, setMedia] = useState<{uri: string, type: 'image'|'video', thumbnail?: string} | null>(null);
+  const [media, setMedia] = useState<{uri: string, type: 'image'|'video'} | null>(null);
   
   // 1. Live Query from Realm (Sorted by newest)
   const posts = useQuery(Post).sorted('timestamp', true);
@@ -176,20 +194,7 @@ export default function HomeScreen() {
                      asset.uri?.toLowerCase().endsWith('.mov') ||
                      asset.uri?.toLowerCase().endsWith('.m4v');
 
-      if (isVideo) {
-        try {
-          // Generate thumbnail for video
-          console.log('🎬 Generating thumbnail for video...');
-          const thumb = await VideoUtils.generateThumbnail(asset.uri);
-          console.log('✅ Thumbnail generated:', thumb);
-          setMedia({ uri: asset.uri, type: 'video', thumbnail: thumb || undefined });
-        } catch (e) {
-          console.error('❌ Failed to generate thumbnail:', e);
-          setMedia({ uri: asset.uri, type: 'video' });
-        }
-      } else {
-        setMedia({ uri: asset.uri, type: 'image' });
-      }
+      setMedia({ uri: asset.uri, type: isVideo ? 'video' : 'image' });
     }
   };
 
@@ -218,7 +223,6 @@ export default function HomeScreen() {
         timestamp: new Date(),
         localUri: permanentUri ?? undefined, // Store permanent local path
         mediaType: media?.type || 'image',
-        thumbnailUrl: media?.thumbnail,
         isSynced: false,
       });
     });
@@ -270,12 +274,17 @@ export default function HomeScreen() {
 
         {media && (
           <View style={styles.previewContainer}>
-            <Image 
-              source={{ uri: media.thumbnail || media.uri }} 
-              style={styles.previewImage} 
-            />
-            {media.type === 'video' && (
-              <Text style={{ position: 'absolute', fontSize: 24 }}>🎬</Text>
+            {media.type === 'video' ? (
+              <View style={[styles.previewImage, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' }]}>
+                <Text style={{ fontSize: 40 }}>🎬</Text>
+                <Text style={{ fontSize: 10, color: '#fff', marginTop: 4 }}>Video</Text>
+              </View>
+            ) : (
+              <Image 
+                source={{ uri: media.uri }} 
+                style={styles.previewImage}
+                contentFit="cover"
+              />
             )}
             <TouchableOpacity onPress={() => setMedia(null)} style={styles.removeButton}>
               <Text style={styles.removeText}>✕</Text>
