@@ -1,10 +1,10 @@
-import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity } from 'react-native';
-import { useRealm, useQuery, Post } from './models';
-import { useAuthStore } from './store/authStore';
+import { Post, useQuery } from '@/src/models';
+import { useAuthStore } from '@/src/store/authStore';
 import { FlashList } from "@shopify/flash-list";
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
+import React from 'react';
+import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
 export default function ProfileScreen() {

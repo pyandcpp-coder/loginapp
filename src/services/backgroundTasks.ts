@@ -1,8 +1,8 @@
 import * as BackgroundFetch from 'expo-background-fetch';
 import * as TaskManager from 'expo-task-manager';
-import { SyncEngine } from './syncEngine';
 import Realm from 'realm';
-import { Post, Like, Comment } from '../models';
+import { Comment, Like, Post } from '../models';
+import { SyncEngine } from './syncEngine';
 
 const BACKGROUND_SYNC_TASK = 'BACKGROUND_SYNC_TASK';
 

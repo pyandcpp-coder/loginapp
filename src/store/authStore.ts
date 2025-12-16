@@ -1,6 +1,6 @@
 // import {create} from "zustand";
-import {create} from "zustand";
 import * as SecureStore from 'expo-secure-store';
+import { create } from "zustand";
 
 //shape of the state
 interface AuthState{

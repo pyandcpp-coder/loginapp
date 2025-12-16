@@ -1,9 +1,9 @@
+import { RealmProvider, useRealm } from "@/src/models";
+import { SyncEngine } from "@/src/services/syncEngine";
+import { useAuthStore } from "@/src/store/authStore";
+import NetInfo from '@react-native-community/netinfo';
 import { Stack, useRouter, useSegments } from "expo-router";
 import { useEffect, useState } from "react";
-import { useAuthStore } from "./store/authStore";
-import { RealmProvider, useRealm } from "./models"; 
-import { SyncEngine } from "./services/syncEngine"; 
-import NetInfo from '@react-native-community/netinfo'; 
 
 function AppLogic() {
   const { isAuthenticated, checkSession, isLoading } = useAuthStore();

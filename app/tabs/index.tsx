@@ -1,3 +1,7 @@
+import { Comment, Like, Post, useQuery, useRealm } from '@/src/models';
+import { SyncEngine } from '@/src/services/syncEngine';
+import { VideoUtils } from '@/src/services/videoUpload';
+import { useAuthStore } from '@/src/store/authStore';
 import NetInfo from '@react-native-community/netinfo';
 import { Realm } from '@realm/react';
 import { FlashList } from "@shopify/flash-list";
@@ -9,10 +13,6 @@ import React, { useState } from 'react';
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Comment, Like, Post, useQuery, useRealm } from '../models';
-import { SyncEngine } from '../services/syncEngine';
-import { VideoUtils } from '../services/videoUpload';
-import { useAuthStore } from '../store/authStore';
 
 const PostItem = ({ item }: { item: Post }) => {
   const realm = useRealm();

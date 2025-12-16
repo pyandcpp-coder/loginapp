@@ -1,7 +1,7 @@
+import { decode } from 'base64-arraybuffer';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { supabase } from './supabaseClient';
-import { decode } from 'base64-arraybuffer';
 
 export const VideoUtils = {
   // 1. Generate Thumbnail

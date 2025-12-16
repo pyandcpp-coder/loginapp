@@ -1,11 +1,14 @@
+import { Comment, Like, Post, useQuery, useRealm } from '@/src/models';
+import { SyncEngine } from '@/src/services/syncEngine';
+import { useAuthStore } from '@/src/store/authStore';
 import { Ionicons } from '@expo/vector-icons';
 import { Realm } from '@realm/react';
 import { FlashList, ViewToken } from "@shopify/flash-list";
-import { ResizeMode, Video } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import React, { useCallback, useRef, useState } from 'react';
 import {
   Dimensions,
@@ -16,9 +19,6 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
-import { Comment, Like, Post, useQuery, useRealm } from '../models';
-import { SyncEngine } from '../services/syncEngine';
-import { useAuthStore } from '../store/authStore';
 
 const { width, height: WINDOW_HEIGHT } = Dimensions.get('window');
 // Calculate height to fit strictly within tab bar constraints if needed, 
@@ -132,55 +132,34 @@ const FeedFooter = ({ item }: { item: Post }) => {
 };
 
 // --- 4. VIDEO COMPONENT (The Core Logic) ---
-const VideoComponent = React.memo(({ item, isVisible, isNext }: { item: Post, isVisible: boolean, isNext: boolean }) => {
-  const videoRef = useRef<Video>(null);
-
-  // 1. Reset logic when the ITEM changes (Recycling)
-  React.useEffect(() => {
-    // When the item changes, we want to ensure we aren't showing old state
-    // Unload the previous video immediately
-    if (videoRef.current) {
-      videoRef.current.unloadAsync(); 
-    }
-  }, [item._id]); // <--- Dependency array: Run this when ID changes
-
-  // 2. Manage Playback - ALWAYS call hooks before any early returns
-  React.useEffect(() => {
-    if (!videoRef.current) return;
-    if (isVisible) {
-      videoRef.current.playAsync();
-    } else {
-      videoRef.current.pauseAsync();
-      if (!isNext) {
-        // Optional: Unload if it gets too far, but pausing is usually enough with the "return null" check above
-        // videoRef.current.unloadAsync(); 
-      }
-    }
-  }, [isVisible, isNext]);
-
-  // If video is not visible AND not the next one, render an empty placeholder.
-  // This saves massive memory/CPU by not keeping 50 videos mounted.
-  if (!isVisible && !isNext) {
-    return <View style={{ height: SCREEN_HEIGHT, width: width, backgroundColor: 'black' }} />;
-  }
-
-  // Re-build the full path dynamically
+const VideoComponent = React.memo(({ item, isVisible }: { item: Post, isVisible: boolean }) => {
+  // 1. BUILD PATH
+  // Remember Lesson 1? Re-build the path if it's local!
   const sourceUri = item.localUri 
-    ? `${FileSystem.documentDirectory?.replace(/file:\/\//, '') || ''}${item.localUri}` 
+    ? `${FileSystem.documentDirectory}${item.localUri}` 
     : item.remoteUrl;
+
+  // 2. NEW PLAYER HOOK
+  const player = useVideoPlayer(sourceUri || '', (player) => {
+    player.loop = true;
+  });
+
+  // 3. CONTROL PLAYBACK BASED ON VISIBILITY
+  React.useEffect(() => {
+    if (isVisible) {
+      player.play();
+    } else {
+      player.pause();
+    }
+  }, [isVisible, player]);
 
   return (
     <View style={[styles.videoContainer, { height: SCREEN_HEIGHT }]}>
-      <Video
-        ref={videoRef}
+      <VideoView
+        player={player}
         style={styles.video}
-        source={{ uri: sourceUri || '' }}
-        resizeMode={ResizeMode.COVER}
-        isLooping
-        shouldPlay={isVisible}
-        posterSource={{ uri: item.thumbnailUrl }}
-        usePoster={true}
-        posterStyle={{ resizeMode: 'cover' }}
+        contentFit="cover"
+        nativeControls={false}
       />
       
       {/* Gradient Overlay for better text visibility */}
@@ -190,18 +169,16 @@ const VideoComponent = React.memo(({ item, isVisible, isNext }: { item: Post, is
       />
     </View>
   );
-}, (prev, next) => prev.isVisible === next.isVisible && prev.isNext === next.isNext && prev.item._id.equals(next.item._id));
+}, (prev, next) => prev.isVisible === next.isVisible && prev.item._id.equals(next.item._id));
 
 
 // --- 5. MAIN FEED ROW ---
 const FeedRow = React.memo(({ item, index, visibleIndex }: { item: Post, index: number, visibleIndex: number | null }) => {
   const isVisible = visibleIndex === index;
-  // Preload the next video so it's ready when user swipes
-  const isNext = visibleIndex !== null && (index === visibleIndex + 1);
 
   return (
     <View style={{ height: SCREEN_HEIGHT, width: width, backgroundColor: 'black' }}>
-      <VideoComponent item={item} isVisible={isVisible} isNext={isNext} />
+      <VideoComponent item={item} isVisible={isVisible} />
       <FeedHeader /> 
       <FeedSideBar item={item} />
       <FeedFooter item={item} />

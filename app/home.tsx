@@ -1,18 +1,18 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, SafeAreaView } from 'react-native';
-import { useRouter, Link } from 'expo-router';
-import { Realm } from '@realm/react';
-import { useRealm, useQuery, Post, Like, Comment } from './models';
-import { FlashList } from "@shopify/flash-list";
-import Animated, { FadeInDown, Layout } from 'react-native-reanimated';
+import { Comment, Like, Post, useQuery, useRealm } from '@/src/models';
+import { SyncEngine } from '@/src/services/syncEngine';
+import { VideoUtils } from '@/src/services/videoUpload';
+import { useAuthStore } from '@/src/store/authStore';
 import NetInfo from '@react-native-community/netinfo';
-import { SyncEngine } from './services/syncEngine';
+import { Realm } from '@realm/react';
+import { FlashList } from "@shopify/flash-list";
+import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system/legacy';
-import { useAuthStore } from './store/authStore';
-import { VideoUtils } from './services/videoUpload';
-
+import { Link, useRouter } from 'expo-router';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import React, { useState } from 'react';
+import { SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 
 const PostItem = ({ item }: { item: Post }) => {
   const realm = useRealm();
@@ -27,6 +27,14 @@ const PostItem = ({ item }: { item: Post }) => {
   
   const myLike = likes.find(l => l.userEmail === user?.email);
   const isLiked = !!myLike;
+  const videoSource = item.mediaType === 'video' ? (item.localUri || item.remoteUrl || '') : '';
+  const player = useVideoPlayer(videoSource, player => {
+    if (player && videoSource) {
+      player.loop = true;
+      player.muted = true; // Auto-play muted in feed is standard
+      // player.play(); // Uncomment if you want auto-play in feed
+    }
+  });
 
   const toggleLike = () => {
     realm.write(() => {
@@ -75,12 +83,25 @@ const PostItem = ({ item }: { item: Post }) => {
     <Animated.View 
       style={styles.postCard}
     >
-      {(item.localUri || item.remoteUrl) && (
-        <Image 
-          source={{ uri: item.localUri || item.remoteUrl }} 
-          style={styles.postImage}
-          contentFit="cover"
-        />
+      {/* CONDITIONAL RENDERING: Video vs Image */}
+      {item.mediaType === 'video' ? (
+        <View style={styles.postImage}>
+          <VideoView 
+            player={player} 
+            style={{ width: '100%', height: '100%' }} 
+            contentFit="cover"
+            nativeControls={false}
+          />
+        </View>
+      ) : (
+        /* Image rendering */
+        (item.localUri || item.remoteUrl) && (
+          <Image 
+            source={{ uri: item.localUri || item.remoteUrl }} 
+            style={styles.postImage}
+            contentFit="cover"
+          />
+        )
       )}
       <Text style={styles.postText}>{item.text}</Text>
       

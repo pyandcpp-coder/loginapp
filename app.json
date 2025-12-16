@@ -48,7 +48,8 @@
         }
       ],
       "expo-task-manager",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-video"
     ],
     "experiments": {
       "typedRoutes": true,

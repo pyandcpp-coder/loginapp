@@ -1,7 +1,6 @@
 import { Realm, createRealmContext } from '@realm/react';
 import * as SecureStore from 'expo-secure-store';
-import 'react-native-get-random-values'; 
-import { StyleBuilderConfig } from 'react-native-reanimated/lib/typescript/css/native';
+import 'react-native-get-random-values';
 
 
 export class Post extends Realm.Object<Post> {
