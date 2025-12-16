@@ -8,6 +8,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { Link, useRouter } from 'expo-router';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import React, { useState } from 'react';
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Animated from 'react-native-reanimated';
@@ -25,14 +26,42 @@ const PostItem = ({ item }: { item: Post }) => {
   const myLike = likes.find(l => l.userEmail === user?.email);
   const isLiked = !!myLike;
 
+  const isVideo = item.mediaType === 'video' || 
+                  item.localUri?.toLowerCase().endsWith('.mp4') || 
+                  item.localUri?.toLowerCase().endsWith('.mov') ||
+                  item.localUri?.toLowerCase().endsWith('.m4v') ||
+                  item.remoteUrl?.toLowerCase().endsWith('.mp4') ||
+                  item.remoteUrl?.toLowerCase().endsWith('.mov') ||
+                  item.remoteUrl?.toLowerCase().endsWith('.m4v');
+
+  const getSourceUri = () => {
+    if (item.localUri) {
+      // Check if it's already a full path
+      if (item.localUri.startsWith('file://') || item.localUri.startsWith('/')) {
+        return item.localUri;
+      }
+      // Otherwise, it's just a filename, prepend the folder
+      return `${FileSystem.documentDirectory}${item.localUri}`;
+    }
+    return item.remoteUrl || null;
+  };
+
+  const fileUri = getSourceUri();
+
+  const player = useVideoPlayer(isVideo && fileUri ? fileUri : null, player => {
+    if (player) {
+      player.loop = true;
+      player.muted = true;
+      player.play();
+    }
+  });
+
   const toggleLike = () => {
     realm.write(() => {
       if (myLike) {
-        // Soft delete: set deletedAt instead of removing
         myLike.deletedAt = new Date();
         myLike.isSynced = false;
       } else {
-        // Check if we have a "soft-deleted" like we can resurrect (optimization)
         const deletedLike = realm.objects<Like>('Like').filtered('postId == $0 AND userEmail == $1 AND deletedAt != null', item._id.toHexString(), user?.email)[0];
         
         if (deletedLike) {
@@ -48,7 +77,6 @@ const PostItem = ({ item }: { item: Post }) => {
         }
       }
     });
-    // Trigger sync silently
     SyncEngine.pushChanges(realm);
   };
 
@@ -69,19 +97,30 @@ const PostItem = ({ item }: { item: Post }) => {
   };
 
   return (
-    <Animated.View 
-      style={styles.postCard}
-    >
-      {(item.localUri || item.remoteUrl) && (
-        <Image 
-          source={{ uri: item.localUri ? `${FileSystem.documentDirectory?.replace(/file:\/\//, '') || ''}${item.localUri}` : item.remoteUrl }} 
-          style={styles.postImage}
-          contentFit="cover"
-        />
+    <Animated.View style={styles.postCard}>
+      {fileUri && (
+        isVideo ? (
+          <View style={styles.postImage}>
+            <VideoView 
+              player={player} 
+              style={{ width: '100%', height: '100%' }} 
+              contentFit="cover"
+              nativeControls={false}
+            />
+            <Text style={styles.videoIcon}>🎬</Text>
+          </View>
+        ) : (
+          <Image 
+            source={{ uri: fileUri }} 
+            style={styles.postImage}
+            contentFit="cover"
+            transition={200}
+          />
+        )
       )}
+      
       <Text style={styles.postText}>{item.text}</Text>
       
-      {/* Action Bar */}
       <View style={styles.actionBar}>
         <TouchableOpacity onPress={toggleLike} style={styles.actionButton}>
           <Text style={{fontSize: 18}}>{isLiked ? "❤️" : "🤍"}</Text>
@@ -94,7 +133,6 @@ const PostItem = ({ item }: { item: Post }) => {
         </TouchableOpacity>
       </View>
 
-      {/* Comments Section */}
       {showComments && (
         <View style={styles.commentSection}>
           {Array.from(comments).map((c) => (
@@ -125,17 +163,15 @@ const PostItem = ({ item }: { item: Post }) => {
   );
 };
 
-// --- MAIN SCREEN ---
 export default function HomeScreen() {
   const router = useRouter();
+  const { user } = useAuthStore();
   const [newPostText, setNewPostText] = useState('');
   const [media, setMedia] = useState<{uri: string, type: 'image'|'video'} | null>(null); 
   
-  // 1. Live Query from Realm (Sorted by newest)
   const realm = useRealm();
   const posts = useQuery(Post).sorted('timestamp', true);
 
-  // 2. Pick Media Function
   const pickMedia = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images', 'videos'] as any,
@@ -146,22 +182,18 @@ export default function HomeScreen() {
 
     if (!result.canceled) {
       const asset = result.assets[0];
-      
-      // Check if it is a video
-      const isVideo = asset.type === 'video' || asset.uri.endsWith('.mp4') || asset.uri.endsWith('.mov');
-
+      const isVideo = asset.type === 'video' || 
+                     asset.uri.endsWith('.mp4') || 
+                     asset.uri.endsWith('.mov');
       setMedia({ uri: asset.uri, type: isVideo ? 'video' : 'image' });
     }
   };
 
-  // 3. Handle New Post (Offline First)
   const handleAddPost = async () => {
     if (!newPostText && !media) return;
 
-    // Copy media to permanent location
     let permanentUri = media?.uri;
     if (media?.uri) {
-      // Determine extension based on type
       const ext = media.type === 'video' ? 'mp4' : 'jpg';
       const filename = `${Date.now()}.${ext}`;
       const newPath = `${FileSystem.documentDirectory}${filename}`;
@@ -172,29 +204,26 @@ export default function HomeScreen() {
       });
       permanentUri = newPath;
     }
+    
     const fileNameOnly = permanentUri?.split('/').pop();
-    // Write to Local DB immediately
+    
     realm.write(() => {
       realm.create('Post', {
         _id: new Realm.BSON.ObjectId(),
         text: newPostText,
         timestamp: new Date(),
-        localUri:  fileNameOnly,
-        
-        // SAVE THE MEDIA TYPE!
+        localUri: fileNameOnly,
         mediaType: media?.type || 'image',
+        userEmail: user?.email || 'anon',
         isSynced: false,
       });
     });
 
-    // Reset Inputs UI
     setNewPostText('');
     setMedia(null);
 
-    // Check Network & Trigger Background Sync
     const state = await NetInfo.fetch();
     if (state.isConnected) {
-
       console.log("⚡️ Online! Triggering immediate sync...");
       SyncEngine.pushChanges(realm); 
     }
@@ -213,6 +242,7 @@ export default function HomeScreen() {
           <Text style={styles.logoutText}>Logout</Text>
         </TouchableOpacity>
       </View>
+      
       <View style={styles.inputWrapper}>
         <View style={styles.inputContainer}>
           <TouchableOpacity onPress={pickMedia} style={styles.imagePickerButton}>
@@ -241,7 +271,7 @@ export default function HomeScreen() {
                 <Text style={{ fontSize: 10, color: '#fff', marginTop: 4 }}>Video</Text>
               </View>
             ) : (
-              <Image source={{ uri: media.uri }} style={styles.previewImage} />
+              <Image source={{ uri: media.uri }} style={styles.previewImage} contentFit="cover" />
             )}
             
             <TouchableOpacity onPress={() => setMedia(null)} style={styles.removeButton}>
@@ -395,6 +425,15 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 12,
     backgroundColor: '#f0f0f0',
+  },
+  videoIcon: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    fontSize: 20,
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: -1, height: 1 },
+    textShadowRadius: 10,
   },
   postText: {
     fontSize: 16,
