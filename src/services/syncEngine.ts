@@ -128,8 +128,17 @@ export const SyncEngine = {
           try {
             console.log(`📹 Uploading video for post ${post._id.toHexString()}`);
             console.log(`📁 Local URI: ${post.localUri}`);
-            // Reconstruct full path from filename (strip file:// scheme if present)
-            const fullPath = `${FileSystem.documentDirectory?.replace(/file:\/\//, '') || ''}${post.localUri}`;
+            
+            // Build correct full path
+            let fullPath = post.localUri;
+            if (!fullPath.startsWith('file://') && !fullPath.startsWith('/')) {
+              // It's just a filename, prepend document directory
+              fullPath = `${FileSystem.documentDirectory}${fullPath}`;
+            }
+            // Remove file:// scheme if present
+            fullPath = fullPath.replace(/^file:\/\//, '');
+            
+            console.log(`📂 Full path: ${fullPath}`);
             publicUrl = await VideoUtils.uploadVideo(fullPath, post._id.toHexString());
             realm.write(() => { post.remoteUrl = publicUrl; });
             console.log(`✅ Uploaded video for post ${post._id.toHexString()}`);
@@ -143,8 +152,15 @@ export const SyncEngine = {
         // Handle IMAGE Upload (Legacy Logic)
         else if (post.mediaType === 'image' && post.localUri && !post.remoteUrl) {
           try {
-            // Reconstruct full path from filename (strip file:// scheme if present)
-            const fullPath = `${FileSystem.documentDirectory?.replace(/file:\/\//, '') || ''}${post.localUri}`;
+            // Build correct full path
+            let fullPath = post.localUri;
+            if (!fullPath.startsWith('file://') && !fullPath.startsWith('/')) {
+              // It's just a filename, prepend document directory
+              fullPath = `${FileSystem.documentDirectory}${fullPath}`;
+            }
+            // Remove file:// scheme if present
+            fullPath = fullPath.replace(/^file:\/\//, '');
+            
             const fileInfo = await FileSystem.getInfoAsync(fullPath);
             if (fileInfo.exists) {
               const fileName = `${post._id.toHexString()}.jpg`;

@@ -27,28 +27,38 @@ const PostItem = ({ item }: { item: Post }) => {
   const myLike = likes.find(l => l.userEmail === user?.email);
   const isLiked = !!myLike;
   
-  // 1. ROBUST VIDEO DETECTION
-  // Check the label OR the file extension
+  // --- FIX 1: Robust Video Detection ---
+  // If the file ends in .mp4/.mov, treat it as a video regardless of what 'mediaType' says
   const isVideo = item.mediaType === 'video' || 
-                  item.localUri?.endsWith('.mp4') || 
-                  item.localUri?.endsWith('.mov') || 
-                  item.localUri?.endsWith('.m4v') ||
-                  item.remoteUrl?.endsWith('.mp4') || 
-                  item.remoteUrl?.endsWith('.mov') ||
-                  item.remoteUrl?.endsWith('.m4v');
-  
-  // 2. CONSTRUCT SOURCE URI
-  // Remember Lesson 1: Rebuild local paths dynamically!
-  const fileUri = item.localUri 
-    ? `${FileSystem.documentDirectory}${item.localUri}` 
-    : item.remoteUrl;
-  
-  // 3. SETUP PLAYER (Only if it is a video)
-  const player = useVideoPlayer(isVideo && fileUri ? fileUri : '', player => {
-    if (player && isVideo && fileUri) {
+                  item.localUri?.toLowerCase().endsWith('.mp4') || 
+                  item.localUri?.toLowerCase().endsWith('.mov') ||
+                  item.localUri?.toLowerCase().endsWith('.m4v') ||
+                  item.remoteUrl?.toLowerCase().endsWith('.mp4') ||
+                  item.remoteUrl?.toLowerCase().endsWith('.mov') ||
+                  item.remoteUrl?.toLowerCase().endsWith('.m4v');
+
+  // --- FIX 2: Correct URI Construction ---
+  // If localUri is just "123.jpg", we MUST prepend the document directory
+  const getSourceUri = () => {
+    if (item.localUri) {
+      // Check if it's already a full path (starts with file:// or /)
+      if (item.localUri.startsWith('file://') || item.localUri.startsWith('/')) {
+        return item.localUri;
+      }
+      // Otherwise, it's just a filename, prepend the folder
+      return `${FileSystem.documentDirectory}${item.localUri}`;
+    }
+    return item.remoteUrl || null;
+  };
+
+  const fileUri = getSourceUri();
+
+  // --- FIX 3: Video Player Setup ---
+  const player = useVideoPlayer(isVideo && fileUri ? fileUri : null, player => {
+    if (player) {
       player.loop = true;
-      player.muted = true; // Auto-play muted in feed is standard
-      // player.play(); // Uncomment if you want auto-play in feed
+      player.muted = true; // Feed videos should be muted
+      player.play();       // Autoplay
     }
   });
 
@@ -101,18 +111,19 @@ const PostItem = ({ item }: { item: Post }) => {
     >
       {/* CONDITIONAL RENDERING: Video vs Image */}
       {isVideo ? (
+        // RENDER VIDEO
         <View style={styles.postImage}>
           <VideoView 
             player={player} 
             style={{ width: '100%', height: '100%' }} 
             contentFit="cover"
-            nativeControls={true}
+            nativeControls={false}
           />
           {/* Optional: Add a small '🎬' icon in the corner so users know it's a video */}
           <Text style={{ position: 'absolute', top: 10, right: 10, fontSize: 20 }}>🎬</Text>
         </View>
       ) : (
-        /* Image Fallback */
+        // RENDER IMAGE
         fileUri && (
           <Image 
             source={{ uri: fileUri }} 

@@ -1,6 +1,7 @@
 import { Post, useQuery } from '@/src/models';
 import { useAuthStore } from '@/src/store/authStore';
 import { FlashList } from "@shopify/flash-list";
+import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import React from 'react';
@@ -50,21 +51,48 @@ export default function ProfileScreen() {
           <FlashList
             data={Array.from(myPosts)}
             keyExtractor={(item) => item._id.toHexString()}
-            renderItem={({ item }) => (
-              <Animated.View entering={FadeInDown.delay(100)} style={styles.postItem}>
-                {/* Show image if exists */}
-                {(item.localUri || item.remoteUrl) && (
-                  <Image source={{ uri: item.localUri || item.remoteUrl }} style={styles.thumbnail} />
-                )}
-                <View style={styles.postContent}>
-                  <Text style={styles.postText} numberOfLines={2}>{item.text}</Text>
-                  <Text style={styles.date}>{item.timestamp.toLocaleDateString()}</Text>
-                  <View style={styles.syncBadge}>
-                    <Text style={styles.syncText}>{item.isSynced ? '✅ Synced' : '⏳ Pending'}</Text>
+            renderItem={({ item }) => {
+              // Detect if it's a video
+              const isVideo = item.mediaType === 'video' || 
+                             item.localUri?.toLowerCase().endsWith('.mp4') || 
+                             item.localUri?.toLowerCase().endsWith('.mov') ||
+                             item.remoteUrl?.toLowerCase().endsWith('.mp4');
+              
+              // Build correct URI
+              const getSourceUri = () => {
+                if (item.localUri) {
+                  if (item.localUri.startsWith('file://') || item.localUri.startsWith('/')) {
+                    return item.localUri;
+                  }
+                  return `${FileSystem.documentDirectory}${item.localUri}`;
+                }
+                return item.remoteUrl || null;
+              };
+              
+              const sourceUri = getSourceUri();
+              
+              return (
+                <Animated.View entering={FadeInDown.delay(100)} style={styles.postItem}>
+                  {/* Show thumbnail - video icon for videos, image for images */}
+                  {sourceUri && (
+                    isVideo ? (
+                      <View style={[styles.thumbnail, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' }]}>
+                        <Text style={{ fontSize: 32 }}>🎬</Text>
+                      </View>
+                    ) : (
+                      <Image source={{ uri: sourceUri }} style={styles.thumbnail} />
+                    )
+                  )}
+                  <View style={styles.postContent}>
+                    <Text style={styles.postText} numberOfLines={2}>{item.text}</Text>
+                    <Text style={styles.date}>{item.timestamp.toLocaleDateString()}</Text>
+                    <View style={styles.syncBadge}>
+                      <Text style={styles.syncText}>{item.isSynced ? '✅ Synced' : '⏳ Pending'}</Text>
+                    </View>
                   </View>
-                </View>
-              </Animated.View>
-            )}
+                </Animated.View>
+              );
+            }}
           />
         </View>
       ) : (

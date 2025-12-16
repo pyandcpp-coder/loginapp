@@ -92,16 +92,9 @@ const FeedSideBar = ({ item }: { item: Post }) => {
       </TouchableOpacity>
 
       <View style={styles.rotatingDisc}>
-        {item.thumbnailUrl ? (
-          <Image 
-            source={{ uri: item.thumbnailUrl }} 
-            style={styles.discImage} 
-          />
-        ) : (
-          <View style={[styles.discImage, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#333' }]}>
-            <Text style={{ fontSize: 20 }}>🎬</Text>
-          </View>
-        )}
+        <View style={[styles.discImage, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#333' }]}>
+          <Text style={{ fontSize: 20 }}>🎬</Text>
+        </View>
       </View>
     </View>
   );
@@ -137,11 +130,20 @@ const FeedFooter = ({ item }: { item: Post }) => {
 
 // --- 4. VIDEO COMPONENT (The Core Logic) ---
 const VideoComponent = React.memo(({ item, isVisible, height }: { item: Post, isVisible: boolean, height: number }) => {
-  // 1. BUILD PATH
-  // Remember Lesson 1? Re-build the path if it's local!
-  const sourceUri = item.localUri 
-    ? `${FileSystem.documentDirectory}${item.localUri}` 
-    : item.remoteUrl;
+  // 1. BUILD PATH - Robust URI Construction
+  const getSourceUri = () => {
+    if (item.localUri) {
+      // Check if it's already a full path (starts with file:// or /)
+      if (item.localUri.startsWith('file://') || item.localUri.startsWith('/')) {
+        return item.localUri;
+      }
+      // Otherwise, it's just a filename, prepend the folder
+      return `${FileSystem.documentDirectory}${item.localUri}`;
+    }
+    return item.remoteUrl || null;
+  };
+
+  const sourceUri = getSourceUri();
 
   // 2. NEW PLAYER HOOK
   const player = useVideoPlayer(sourceUri || '', (player) => {

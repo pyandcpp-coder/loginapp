@@ -1,6 +1,5 @@
 import { Comment, Like, Post, useQuery, useRealm } from '@/src/models';
 import { SyncEngine } from '@/src/services/syncEngine';
-import { VideoUtils } from '@/src/services/videoUpload';
 import { useAuthStore } from '@/src/store/authStore';
 import NetInfo from '@react-native-community/netinfo';
 import { Realm } from '@realm/react';
@@ -130,7 +129,7 @@ const PostItem = ({ item }: { item: Post }) => {
 export default function HomeScreen() {
   const router = useRouter();
   const [newPostText, setNewPostText] = useState('');
-  const [media, setMedia] = useState<{uri: string, type: 'image'|'video', thumbnail?: string} | null>(null); 
+  const [media, setMedia] = useState<{uri: string, type: 'image'|'video'} | null>(null); 
   
   // 1. Live Query from Realm (Sorted by newest)
   const realm = useRealm();
@@ -151,13 +150,7 @@ export default function HomeScreen() {
       // Check if it is a video
       const isVideo = asset.type === 'video' || asset.uri.endsWith('.mp4') || asset.uri.endsWith('.mov');
 
-      if (isVideo) {
-        // Generate thumbnail so we can show a preview
-        const thumb = await VideoUtils.generateThumbnail(asset.uri);
-        setMedia({ uri: asset.uri, type: 'video', thumbnail: thumb || undefined });
-      } else {
-        setMedia({ uri: asset.uri, type: 'image' });
-      }
+      setMedia({ uri: asset.uri, type: isVideo ? 'video' : 'image' });
     }
   };
 
@@ -189,8 +182,7 @@ export default function HomeScreen() {
         localUri:  fileNameOnly,
         
         // SAVE THE MEDIA TYPE!
-        mediaType: media?.type || 'image', 
-        thumbnailUrl: media?.thumbnail,
+        mediaType: media?.type || 'image',
         isSynced: false,
       });
     });
@@ -243,9 +235,14 @@ export default function HomeScreen() {
 
         {media && (
           <View style={styles.previewContainer}>
-            <Image source={{ uri: media.thumbnail || media.uri }} style={styles.previewImage} />
-            
-            {media.type === 'video' && <Text style={{position:'absolute', left: 20}}>🎬</Text>}
+            {media.type === 'video' ? (
+              <View style={[styles.previewImage, { justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' }]}>
+                <Text style={{ fontSize: 40 }}>🎬</Text>
+                <Text style={{ fontSize: 10, color: '#fff', marginTop: 4 }}>Video</Text>
+              </View>
+            ) : (
+              <Image source={{ uri: media.uri }} style={styles.previewImage} />
+            )}
             
             <TouchableOpacity onPress={() => setMedia(null)} style={styles.removeButton}>
               <Text style={styles.removeText}>✕</Text>
