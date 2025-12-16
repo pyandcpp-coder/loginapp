@@ -1,8 +1,8 @@
-import { supabase } from './supabaseClient';
 import { Realm } from '@realm/react';
-import { Post, Like, Comment, SystemSettings } from '../models'; 
-import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
+import * as FileSystem from 'expo-file-system/legacy';
+import { Comment, Like, Post, SystemSettings } from '../models';
+import { supabase } from './supabaseClient';
 import { VideoUtils } from './videoUpload';
 
 // Exponential Backoff Retry Logic
@@ -128,7 +128,9 @@ export const SyncEngine = {
           try {
             console.log(`📹 Uploading video for post ${post._id.toHexString()}`);
             console.log(`📁 Local URI: ${post.localUri}`);
-            publicUrl = await VideoUtils.uploadVideo(post.localUri, post._id.toHexString());
+            // Reconstruct full path from filename (strip file:// scheme if present)
+            const fullPath = `${FileSystem.documentDirectory?.replace(/file:\/\//, '') || ''}${post.localUri}`;
+            publicUrl = await VideoUtils.uploadVideo(fullPath, post._id.toHexString());
             realm.write(() => { post.remoteUrl = publicUrl; });
             console.log(`✅ Uploaded video for post ${post._id.toHexString()}`);
             console.log(`🔗 Remote URL: ${publicUrl}`);
@@ -141,12 +143,14 @@ export const SyncEngine = {
         // Handle IMAGE Upload (Legacy Logic)
         else if (post.mediaType === 'image' && post.localUri && !post.remoteUrl) {
           try {
-            const fileInfo = await FileSystem.getInfoAsync(post.localUri);
+            // Reconstruct full path from filename (strip file:// scheme if present)
+            const fullPath = `${FileSystem.documentDirectory?.replace(/file:\/\//, '') || ''}${post.localUri}`;
+            const fileInfo = await FileSystem.getInfoAsync(fullPath);
             if (fileInfo.exists) {
               const fileName = `${post._id.toHexString()}.jpg`;
               
               // Read file as base64
-              const base64 = await FileSystem.readAsStringAsync(post.localUri, {
+              const base64 = await FileSystem.readAsStringAsync(fullPath, {
                 encoding: FileSystem.EncodingType.Base64,
               });
               

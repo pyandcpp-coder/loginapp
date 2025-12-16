@@ -1,20 +1,23 @@
-import React, { useState, useRef, useCallback, useMemo } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  Dimensions, 
-  TouchableOpacity, 
-  StatusBar, 
-  Platform 
-} from 'react-native';
-import { useFocusEffect } from 'expo-router';
-import { useQuery, Post } from '../models';
+import { Ionicons } from '@expo/vector-icons';
+import { Realm } from '@realm/react';
 import { FlashList, ViewToken } from "@shopify/flash-list";
 import { ResizeMode, Video } from 'expo-av';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Ionicons, FontAwesome } from '@expo/vector-icons';
+import { useFocusEffect } from 'expo-router';
+import React, { useCallback, useRef, useState } from 'react';
+import {
+  Dimensions,
+  Platform,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View
+} from 'react-native';
+import { Comment, Like, Post, useQuery, useRealm } from '../models';
+import { SyncEngine } from '../services/syncEngine';
 import { useAuthStore } from '../store/authStore';
 
 const { width, height: WINDOW_HEIGHT } = Dimensions.get('window');
@@ -34,16 +37,51 @@ const FeedHeader = () => (
 
 // --- 2. SIDEBAR COMPONENT (Likes, Comments, etc) ---
 const FeedSideBar = ({ item }: { item: Post }) => {
+  const realm = useRealm();
+  const { user } = useAuthStore();
+  const likes = useQuery(Like).filtered('postId == $0 AND deletedAt == null', item._id.toHexString());
+  const comments = useQuery(Comment).filtered('postId == $0 AND deletedAt == null', item._id.toHexString());
+  
+  const myLike = likes.find(l => l.userEmail === user?.email);
+  const isLiked = !!myLike;
+
+  const toggleLike = () => {
+    realm.write(() => {
+      if (myLike) {
+        // Soft delete: set deletedAt instead of removing
+        myLike.deletedAt = new Date();
+        myLike.isSynced = false;
+      } else {
+        // Check if we have a "soft-deleted" like we can resurrect (optimization)
+        const deletedLike = realm.objects<Like>('Like').filtered('postId == $0 AND userEmail == $1 AND deletedAt != null', item._id.toHexString(), user?.email)[0];
+        
+        if (deletedLike) {
+          deletedLike.deletedAt = undefined;
+          deletedLike.isSynced = false;
+        } else {
+          realm.create('Like', {
+            _id: new Realm.BSON.ObjectId(),
+            postId: item._id.toHexString(),
+            userEmail: user?.email || 'anon',
+            isSynced: false,
+          });
+        }
+      }
+    });
+    // Trigger sync silently
+    SyncEngine.pushChanges(realm);
+  };
+
   return (
     <View style={styles.sidebarContainer}>
-      <View style={styles.iconWrapper}>
-        <Ionicons name="heart-outline" size={30} color="white" />
-        <Text style={styles.iconText}>12.5k</Text>
-      </View>
+      <TouchableOpacity style={styles.iconWrapper} onPress={toggleLike}>
+        <Ionicons name={isLiked ? "heart" : "heart-outline"} size={30} color={isLiked ? "#ff3b30" : "white"} />
+        <Text style={styles.iconText}>{likes.length}</Text>
+      </TouchableOpacity>
       
       <View style={styles.iconWrapper}>
         <Ionicons name="chatbubble-outline" size={28} color="white" />
-        <Text style={styles.iconText}>458</Text>
+        <Text style={styles.iconText}>{comments.length}</Text>
       </View>
 
       <View style={styles.iconWrapper}>
@@ -97,7 +135,16 @@ const FeedFooter = ({ item }: { item: Post }) => {
 const VideoComponent = React.memo(({ item, isVisible, isNext }: { item: Post, isVisible: boolean, isNext: boolean }) => {
   const videoRef = useRef<Video>(null);
 
-  // Manage Playback - ALWAYS call hooks before any early returns
+  // 1. Reset logic when the ITEM changes (Recycling)
+  React.useEffect(() => {
+    // When the item changes, we want to ensure we aren't showing old state
+    // Unload the previous video immediately
+    if (videoRef.current) {
+      videoRef.current.unloadAsync(); 
+    }
+  }, [item._id]); // <--- Dependency array: Run this when ID changes
+
+  // 2. Manage Playback - ALWAYS call hooks before any early returns
   React.useEffect(() => {
     if (!videoRef.current) return;
     if (isVisible) {
@@ -117,12 +164,17 @@ const VideoComponent = React.memo(({ item, isVisible, isNext }: { item: Post, is
     return <View style={{ height: SCREEN_HEIGHT, width: width, backgroundColor: 'black' }} />;
   }
 
+  // Re-build the full path dynamically
+  const sourceUri = item.localUri 
+    ? `${FileSystem.documentDirectory?.replace(/file:\/\//, '') || ''}${item.localUri}` 
+    : item.remoteUrl;
+
   return (
     <View style={[styles.videoContainer, { height: SCREEN_HEIGHT }]}>
       <Video
         ref={videoRef}
         style={styles.video}
-        source={{ uri: item.localUri || item.remoteUrl || '' }}
+        source={{ uri: sourceUri || '' }}
         resizeMode={ResizeMode.COVER}
         isLooping
         shouldPlay={isVisible}
@@ -138,7 +190,7 @@ const VideoComponent = React.memo(({ item, isVisible, isNext }: { item: Post, is
       />
     </View>
   );
-}, (prev, next) => prev.isVisible === next.isVisible && prev.isNext === next.isNext);
+}, (prev, next) => prev.isVisible === next.isVisible && prev.isNext === next.isNext && prev.item._id.equals(next.item._id));
 
 
 // --- 5. MAIN FEED ROW ---

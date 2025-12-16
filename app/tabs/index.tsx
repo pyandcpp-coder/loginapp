@@ -1,18 +1,18 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, Link } from 'expo-router';
-import { Realm } from '@realm/react';
-import { useRealm, useQuery, Post, Like, Comment } from '../models';
-import { FlashList } from "@shopify/flash-list";
-import Animated, { FadeInDown, Layout } from 'react-native-reanimated';
 import NetInfo from '@react-native-community/netinfo';
-import { SyncEngine } from '../services/syncEngine';
+import { Realm } from '@realm/react';
+import { FlashList } from "@shopify/flash-list";
+import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system/legacy';
-import { useAuthStore } from '../store/authStore';
+import { Link, useRouter } from 'expo-router';
+import React, { useState } from 'react';
+import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import Animated from 'react-native-reanimated';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Comment, Like, Post, useQuery, useRealm } from '../models';
+import { SyncEngine } from '../services/syncEngine';
 import { VideoUtils } from '../services/videoUpload';
+import { useAuthStore } from '../store/authStore';
 
 const PostItem = ({ item }: { item: Post }) => {
   const realm = useRealm();
@@ -20,8 +20,6 @@ const PostItem = ({ item }: { item: Post }) => {
   const [commentText, setCommentText] = useState('');
   const [showComments, setShowComments] = useState(false);
 
-  // Live Queries for THIS post
-  // FIX: Only count likes that are NOT deleted (deletedAt == null)
   const likes = useQuery(Like).filtered('postId == $0 AND deletedAt == null', item._id.toHexString());
   const comments = useQuery(Comment).filtered('postId == $0 AND deletedAt == null', item._id.toHexString()).sorted('timestamp');
   
@@ -77,7 +75,7 @@ const PostItem = ({ item }: { item: Post }) => {
     >
       {(item.localUri || item.remoteUrl) && (
         <Image 
-          source={{ uri: item.localUri || item.remoteUrl }} 
+          source={{ uri: item.localUri ? `${FileSystem.documentDirectory?.replace(/file:\/\//, '') || ''}${item.localUri}` : item.remoteUrl }} 
           style={styles.postImage}
           contentFit="cover"
         />
@@ -181,14 +179,14 @@ export default function HomeScreen() {
       });
       permanentUri = newPath;
     }
-
+    const fileNameOnly = permanentUri?.split('/').pop();
     // Write to Local DB immediately
     realm.write(() => {
       realm.create('Post', {
         _id: new Realm.BSON.ObjectId(),
         text: newPostText,
         timestamp: new Date(),
-        localUri: permanentUri ?? undefined,
+        localUri:  fileNameOnly,
         
         // SAVE THE MEDIA TYPE!
         mediaType: media?.type || 'image', 
