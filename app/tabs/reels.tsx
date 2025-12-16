@@ -111,7 +111,6 @@ const VideoComponent = React.memo(({ item, isVisible, isNext }: { item: Post, is
     }
   }, [isVisible, isNext]);
 
-  // OPTIMIZATION: From the article comments
   // If video is not visible AND not the next one, render an empty placeholder.
   // This saves massive memory/CPU by not keeping 50 videos mounted.
   if (!isVisible && !isNext) {
